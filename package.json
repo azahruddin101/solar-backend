@@ -1,0 +1,24 @@
+{
+  "name": "sss-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "seed": "node --env-file-if-exists=.env src/seeders/index.js",
+    "seed:fresh": "node --env-file-if-exists=.env src/seeders/index.js --fresh"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.10.1",
+    "multer": "^2.4.0",
+    "qrcode": "^1.5.4",
+    "sanitize-html": "^2.17.7"
+  }
+}
