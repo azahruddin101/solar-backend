@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { DESIGN_STATUS } from '../constants/index.js';
+import { activityLogSchema } from './activityLog.schema.js';
 import { schemaOptions, text } from './schemaOptions.js';
 
 const designSchema = new mongoose.Schema(
@@ -16,6 +17,7 @@ const designSchema = new mongoose.Schema(
       cost: { type: Number, default: 0 },
       annualKwh: { type: Number, default: 0 },
     },
+    logs: [activityLogSchema],
   },
   { ...schemaOptions, minimize: false },
 );

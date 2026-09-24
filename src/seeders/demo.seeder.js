@@ -1,23 +1,21 @@
 // Demo tenants: companies with branding images, product catalog, clients and designs.
 // Idempotent — a company whose sign-in email already exists is left untouched.
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { env } from '../config/env.js';
 import { ROLES } from '../constants/index.js';
-import { Client, Company, Design, Panel, Pillar, User } from '../models/index.js';
+import { Client, Company, Design, User } from '../models/index.js';
 import { publicPath } from '../services/asset.service.js';
+import { createStarterCatalog } from '../services/catalog.service.js';
+import { putFile } from '../services/storage.service.js';
 import { hashPassword } from '../utils/password.js';
 import { cleanRichText } from '../utils/richText.js';
 import { drawLogo, drawQr, drawSignature } from './brandImages.js';
 import { COMPANIES, DEMO_PASSWORD } from './data/companies.js';
 
-async function writeBrandImages(company) {
-  await fs.mkdir(env.uploadDir, { recursive: true });
+export async function writeBrandImages(company) {
   const website = company.website ? `https://${company.website.replace(/^https?:\/\//, '')}` : `mailto:${company.email}`;
   const images = { logo: drawLogo(company.theme), signature: drawSignature(company.signatoryName || company.name), qr: await drawQr(website) };
   for (const [kind, buffer] of Object.entries(images)) {
     const fileName = `${company.id}-${kind}-seed.png`; // same naming as multer uploads
-    await fs.writeFile(path.join(env.uploadDir, fileName), buffer);
+    await putFile(fileName, buffer, 'image/png');
     company[kind] = publicPath(fileName);
   }
   await company.save();
@@ -32,8 +30,26 @@ async function seedCompany(seed, index) {
   const company = await Company.create({ ...seed.company, pdfTerms: cleanRichText(seed.company.pdfTerms || '') });
   await User.create({ email: seed.login.email, name: seed.login.name, passwordHash: await hashPassword(DEMO_PASSWORD), role: ROLES.COMPANY, company: company._id });
   await writeBrandImages(company);
-  await Panel.insertMany(seed.panels.map((p) => ({ ...p, company: company._id })));
-  await Pillar.insertMany(seed.pillars.map((p) => ({ ...p, company: company._id })));
+  await createStarterCatalog(company._id, { panels: seed.panels, pillars: seed.pillars });
+
+  // Seed agents for company
+  if (Array.isArray(seed.agents)) {
+    for (const agent of seed.agents) {
+      if (!(await User.exists({ email: agent.email }))) {
+        await User.create({
+          email: agent.email,
+          name: agent.name,
+          phone: agent.phone,
+          jobTitle: agent.jobTitle,
+          roles: agent.roles?.length ? agent.roles : agent.jobTitle ? [agent.jobTitle] : [],
+          passwordHash: await hashPassword(DEMO_PASSWORD),
+          role: ROLES.AGENT,
+          company: company._id,
+          active: true,
+        });
+      }
+    }
+  }
 
   const clients = new Map();
   for (const [i, { key, ...client }] of seed.clients.entries()) {

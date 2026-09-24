@@ -34,13 +34,14 @@ export async function buildingInsights({ lat, lng, referer }) {
     last = { status: upstream.status, message: body?.error?.message || upstream.statusText, code: body?.error?.status || 'ERROR' };
     if (upstream.status !== 404) break;
   }
+  if (last.status !== 404) console.error(`[google] Solar API ${last.status} ${last.code}: ${last.message}`); // details stay in the server log
   const message =
     last.status === 404
       ? 'Google Solar API has no data for this building yet.'
-      : last.status === 403
-        ? `Solar API request was denied: ${last.message}`
-        : last.message;
-  throw new HttpError(last.status, message, last.code);
+      : last.status === 403 || last.status === 401
+        ? 'The satellite data service refused the request. Contact the platform administrator.'
+        : 'The satellite data service is not available right now. Try again in a moment.';
+  throw new HttpError(last.status === 404 ? 404 : last.status === 429 ? 429 : 502, message, last.status === 404 ? 'NOT_FOUND' : 'UPSTREAM');
 }
 
 /** Satellite image (3D ground texture, PDF site image). Optional outline: pts=lat,lng;lat,lng;… */
@@ -74,7 +75,8 @@ export async function staticMap({ query, referer }) {
   const type = upstream.headers.get('content-type') || '';
   if (!upstream.ok || !type.startsWith('image/')) {
     const text = await upstream.text().catch(() => '');
-    throw new HttpError(upstream.ok ? 502 : upstream.status, text.slice(0, 300) || `Static Maps error ${upstream.status}`);
+    console.error(`[google] Static Maps ${upstream.status}: ${text.slice(0, 300)}`); // details stay in the server log
+    throw new HttpError(upstream.status === 429 ? 429 : 502, 'The satellite image service is not available right now.');
   }
   return { type, buffer: Buffer.from(await upstream.arrayBuffer()) };
 }

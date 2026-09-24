@@ -1,8 +1,9 @@
-import { designerCatalog, importPanels, panelService, pillarService } from '../services/catalog.service.js';
+import { categoryService, designerCatalog, importPanels, productService } from '../services/catalog.service.js';
 
-/** Same four handlers for panels and poles. */
+/** Same four handlers for every catalog resource. */
 const handlers = (service) => ({
-  list: async (req, res) => res.json(await service.list(req.company)),
+  list: async (req, res) => res.json(await service.list(req.company, req.query)),
+  get: async (req, res) => res.json(await service.get(req.company, req.params.id)),
   create: async (req, res) => res.status(201).json(await service.create(req.company, req.body)),
   update: async (req, res) => res.json(await service.update(req.company, req.params.id, req.body)),
   remove: async (req, res) => {
@@ -11,11 +12,15 @@ const handlers = (service) => ({
   },
 });
 
-export const panels = handlers(panelService);
-export const pillars = handlers(pillarService);
+export const categories = handlers(categoryService);
+export const products = handlers(productService);
+
+export async function reorderCategories(req, res) {
+  res.json(await categoryService.reorder(req.company, req.body?.ids));
+}
 
 export async function importPanelRows(req, res) {
-  res.json(await importPanels(req.company, req.body?.items));
+  res.json(await importPanels(req.company, req.body?.category, req.body?.items));
 }
 
 export async function getDesignerCatalog(req, res) {

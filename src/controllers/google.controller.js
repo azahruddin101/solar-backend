@@ -1,4 +1,5 @@
 import * as googleService from '../services/google.service.js';
+import { signMapToken } from '../utils/token.js';
 
 export async function solar(req, res) {
   const body = await googleService.buildingInsights({ lat: req.query.lat, lng: req.query.lng, referer: req.get('referer') });
@@ -8,4 +9,8 @@ export async function solar(req, res) {
 export async function staticMap(req, res) {
   const { type, buffer } = await googleService.staticMap({ query: req.query, referer: req.get('referer') });
   res.set({ 'Content-Type': type, 'Cache-Control': 'private, max-age=86400' }).send(buffer);
+}
+
+export function mapToken(req, res) {
+  res.set('Cache-Control', 'no-store').json({ token: signMapToken({ user: req.user, sid: req.sessionId, by: req.impersonatedBy }), expiresInSeconds: 15 * 60 });
 }

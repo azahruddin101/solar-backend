@@ -1,9 +1,10 @@
 export class HttpError extends Error {
-  /** `code` is an optional machine-readable reason sent alongside the message. */
-  constructor(status, message, code) {
+  /** `code` is optional; `details` is extra JSON for the client (e.g. active devices). */
+  constructor(status, message, code, details) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 

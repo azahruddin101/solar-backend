@@ -9,7 +9,14 @@ const userSchema = new mongoose.Schema(
     role: { type: String, enum: Object.values(ROLES), required: true },
     name: text(120),
     company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+    // agents (field staff) — managed by their company
+    phone: text(40),
+    jobTitle: text(80), // legacy single role; prefer `roles`
+    roles: { type: [{ type: String, trim: true, maxlength: 40 }], default: () => [] },
+    photo: text(300), // /uploads/… portrait (optional)
+    active: { type: Boolean, default: true }, // an inactive agent cannot sign in
     lastLoginAt: Date,
+    tokenVersion: { type: Number, default: 0 }, // bumped when the password changes: every older sign-in token stops working
   },
   schemaOptions,
 );

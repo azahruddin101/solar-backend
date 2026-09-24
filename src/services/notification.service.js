@@ -1,0 +1,125 @@
+// Who hears about what. Business code calls a notify* function after the change is saved; delivery goes
+// through OneSignal and can never fail the caller.
+import { ROLES, STEP_STATUS_LABEL } from '../constants/index.js';
+import { env } from '../config/env.js';
+import { Design, Notification, User } from '../models/index.js';
+import { isOneSignalConfigured, sendPush } from './onesignal.service.js';
+
+/** Save the inbox rows; a duplicate (same event, same user) is silently skipped by the unique index. */
+async function record(audiences, entry) {
+  const docs = audiences.flatMap((a) => a.userIds.map((user) => ({ ...entry, user, path: a.path })));
+  if (!docs.length) return;
+  try {
+    await Notification.insertMany(docs, { ordered: false });
+  } catch (e) {
+    if (e.code !== 11000 && !e.writeErrors?.every((w) => w.code === 11000)) console.error(`[notifications] could not save inbox entries: ${e.message}`);
+  }
+}
+
+/** Send to several audiences (each with its own link); one failure doesn't stop the others. */
+async function deliver(groups, payload) {
+  for (const { userIds, url } of groups) {
+    if (!userIds.length || !isOneSignalConfigured()) continue;
+    try {
+      await sendPush({ ...payload, userIds, url, idempotencyKey: `${payload.idempotencyKey}:${url}` });
+    } catch (e) {
+      console.error(`[push] delivery failed (${payload.data?.event}): ${e.message}`);
+    }
+  }
+}
+
+/**
+ * A step's status changed (the caller only invokes this for a real transition).
+ * Recipients: the step's assignee (→ /agent) and the company owner(s) (→ /dashboard), never the person who made the change.
+ */
+export function notifyStepStatusChange(change) {
+  // Detached on purpose: the status update has already succeeded and must not wait on, or fail because of, OneSignal.
+  sendStepStatusChange(change).catch((e) => console.error(`[push] step notification failed: ${e.message}`));
+}
+
+async function sendStepStatusChange({ projectId, companyId, designId, stepId, stepName, assigneeId, actorId, from, to, eventId }) {
+  const [owners, design] = await Promise.all([
+    User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean(),
+    Design.findById(designId).select('name').lean(),
+  ]);
+  const notActor = (id) => String(id) !== actorId;
+  const agentIds = assigneeId ? [assigneeId].filter(notActor) : [];
+  const ownerIds = owners.map((u) => String(u._id)).filter(notActor);
+
+  const label = STEP_STATUS_LABEL[to] || to;
+  const project = design?.name ? ` (${design.name})` : '';
+  const audiences = [
+    { userIds: ownerIds, path: `/dashboard/installations/${projectId}` },
+    { userIds: agentIds, path: `/agent/projects/${projectId}` },
+  ];
+  const message = {
+    title: 'Installation Step Updated',
+    body: `${stepName} has been marked as ${label}${project}.`,
+    data: { event: 'step_status_changed', installationId: projectId, installationStepId: stepId, status: to, previousStatus: from },
+  };
+
+  // Inbox first (independent of push being configured), then the push.
+  await record(audiences, { ...message, company: companyId, type: 'step_status_changed', eventKey: `step-status:${eventId}` });
+  await deliver(
+    audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })),
+    { ...message, idempotencyKey: `step-status:${eventId}` },
+  );
+}
+
+/* ───────────── inbox (read side) ───────────── */
+
+const PAGE = 30;
+
+/** Newest first. `before` (ISO date of the last item seen) pages further back. */
+export async function listFor(user, { before, limit } = {}) {
+  const take = Math.min(Math.max(Number(limit) || PAGE, 1), 100);
+  const filter = { user: user._id };
+  const cursor = before ? new Date(before) : null;
+  if (cursor && !Number.isNaN(cursor.getTime())) filter.createdAt = { $lt: cursor };
+  const [rows, unread] = await Promise.all([
+    Notification.find(filter).sort({ createdAt: -1, _id: -1 }).limit(take + 1),
+    Notification.countDocuments({ user: user._id, readAt: null }),
+  ]);
+  return { items: rows.slice(0, take), hasMore: rows.length > take, unread };
+}
+
+export const unreadCount = (user) => Notification.countDocuments({ user: user._id, readAt: null });
+
+export async function markRead(user, id) {
+  await Notification.updateOne({ _id: id, user: user._id, readAt: null }, { readAt: new Date() });
+}
+
+export async function markAllRead(user) {
+  await Notification.updateMany({ user: user._id, readAt: null }, { readAt: new Date() });
+}
+
+/** A step was assigned to an agent (manually or automatically). Only the assignee hears about it. */
+export function notifyStepAssigned(assignment) {
+  sendStepAssigned(assignment).catch((e) => console.error(`[push] assignment notification failed: ${e.message}`));
+}
+
+async function sendStepAssigned({ projectId, companyId, designId, stepId, stepName, assigneeId, actorId, eventId }) {
+  if (!assigneeId || assigneeId === actorId) return;
+  const design = await Design.findById(designId).select('name').lean();
+  const audiences = [{ userIds: [assigneeId], path: `/agent/projects/${projectId}` }];
+  const message = {
+    title: 'New Installation Step Assigned',
+    body: `You have been assigned “${stepName}”${design?.name ? ` (${design.name})` : ''}.`,
+    data: { event: 'step_assigned', installationId: projectId, installationStepId: stepId },
+  };
+  await record(audiences, { ...message, company: companyId, type: 'step_assigned', eventKey: `step-assigned:${eventId}` });
+  await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...message, idempotencyKey: `step-assigned:${eventId}` });
+}
+
+/** The platform admin replied to / changed a ticket: tell the company's owner(s). */
+export function notifyTicketUpdate(update) {
+  sendTicketUpdate(update).catch((e) => console.error(`[push] ticket notification failed: ${e.message}`));
+}
+
+async function sendTicketUpdate({ ticketId, companyId, ref, subject, title, body, eventId }) {
+  const owners = await User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean();
+  const audiences = [{ userIds: owners.map((u) => String(u._id)), path: `/dashboard/support/${ticketId}` }];
+  const message = { title, body: `${ref} · ${subject}: ${body}`.slice(0, 300), data: { event: 'ticket_update', ticketId } };
+  await record(audiences, { ...message, company: companyId, type: 'ticket_update', eventKey: `ticket:${eventId}` });
+  await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...message, idempotencyKey: `ticket:${eventId}` });
+}

@@ -1,10 +1,9 @@
 // Branding images live in the uploads folder (written by multer, see upload.middleware.js) and are
 // served at /uploads/<file>. File names start with the owning company's id.
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { env } from '../config/env.js';
 import { ASSET_KINDS } from '../constants/index.js';
 import { badRequest } from '../utils/HttpError.js';
+import { deleteByPrefix, deleteFile } from './storage.service.js';
 
 const assertKind = (kind) => {
   if (!ASSET_KINDS.includes(kind)) throw badRequest('Unknown asset');
@@ -15,7 +14,7 @@ export const publicPath = (fileName) => `/uploads/${fileName}`;
 async function removeFile(company, kind) {
   // basename + id prefix: only ever delete this company's own files inside the uploads folder
   const name = path.basename(company[kind] || '');
-  if (name.startsWith(`${company.id}-`)) await fs.rm(path.join(env.uploadDir, name), { force: true });
+  if (name.startsWith(`${company.id}-`)) await deleteFile(name);
 }
 
 /** `file` is the multer file that was just stored on disk. */
@@ -37,7 +36,5 @@ export async function deleteAsset(company, kind) {
 }
 
 export async function deleteCompanyAssets(companyId) {
-  const prefix = `${companyId}-`;
-  const files = await fs.readdir(env.uploadDir).catch(() => []);
-  await Promise.all(files.filter((f) => f.startsWith(prefix)).map((f) => fs.rm(path.join(env.uploadDir, f), { force: true })));
+  await deleteByPrefix(`${companyId}-`);
 }

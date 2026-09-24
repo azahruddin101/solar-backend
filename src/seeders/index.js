@@ -7,11 +7,13 @@ import { connectDb } from '../config/db.js';
 import { env } from '../config/env.js';
 import { seedDemoData } from './demo.seeder.js';
 import { COMPANIES, DEMO_PASSWORD } from './data/companies.js';
+import { assertSeedAllowed } from './guard.js';
 import { ensureSuperAdmin } from './superAdmin.seeder.js';
 
 const fresh = process.argv.includes('--fresh');
 
 try {
+  assertSeedAllowed();
   const db = await connectDb();
   console.log(`MongoDB connected: ${db.name}`);
 
@@ -28,8 +30,15 @@ try {
   await seedDemoData();
 
   console.log('\nSign-ins');
-  console.log(`  Super admin  ${env.superAdminEmail}  (password: SUPERADMIN_PASSWORD in backend/.env)`);
-  for (const c of COMPANIES) console.log(`  Company      ${c.login.email}  /  ${DEMO_PASSWORD}${c.company.status === 'suspended' ? '  (suspended)' : ''}`);
+  console.log(`  Super admin  ${env.superAdminEmail}  /  ${env.superAdminPassword}`);
+  for (const c of COMPANIES) {
+    console.log(`  Company      ${c.login.email}  /  ${DEMO_PASSWORD}${c.company.status === 'suspended' ? '  (suspended)' : ''}`);
+    if (c.agents?.length) {
+      for (const a of c.agents) {
+        console.log(`    Agent      ${a.email}  /  ${DEMO_PASSWORD} (${a.name} · ${a.jobTitle})`);
+      }
+    }
+  }
 } catch (e) {
   console.error(`Seeding failed: ${e.message}`);
   process.exitCode = 1;

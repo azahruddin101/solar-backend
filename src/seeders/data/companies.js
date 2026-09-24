@@ -1,17 +1,19 @@
 // Demo tenants. Every company signs in with DEMO_PASSWORD (see ../index.js output).
 // Roof outlines are in metres relative to the site origin (x = east, y = north).
 
-const rect = (w, d) => [{ x: -w / 2, y: -d / 2 }, { x: w / 2, y: -d / 2 }, { x: w / 2, y: d / 2 }, { x: -w / 2, y: d / 2 }];
-const lShape = (w, d, cutW, cutD) => [{ x: -w / 2, y: -d / 2 }, { x: w / 2, y: -d / 2 }, { x: w / 2, y: d / 2 - cutD }, { x: w / 2 - cutW, y: d / 2 - cutD }, { x: w / 2 - cutW, y: d / 2 }, { x: -w / 2, y: d / 2 }];
+export const rect = (w, d) => [{ x: -w / 2, y: -d / 2 }, { x: w / 2, y: -d / 2 }, { x: w / 2, y: d / 2 }, { x: -w / 2, y: d / 2 }];
+export const lShape = (w, d, cutW, cutD) => [{ x: -w / 2, y: -d / 2 }, { x: w / 2, y: -d / 2 }, { x: w / 2, y: d / 2 - cutD }, { x: w / 2 - cutW, y: d / 2 - cutD }, { x: w / 2 - cutW, y: d / 2 }, { x: -w / 2, y: d / 2 }];
 
-const site = (address, lat, lng, points, height = 6) => ({
+export const site = (address, lat, lng, points, height = 6) => ({
   place: { address, location: { lat, lng } },
   origin: { lat, lng },
   sections: [{ id: 'r-main', name: 'Main roof', points, height, parapetH: 1, parapetT: 0.23 }],
   objects: [],
 });
 
-export const DEMO_PASSWORD = 'Demo@12345';
+import { demoPassword } from '../guard.js';
+
+export const DEMO_PASSWORD = demoPassword();
 
 export const COMPANIES = [
   {
@@ -57,11 +59,65 @@ export const COMPANIES = [
       { name: 'GI round pipe 2"', shape: 'cylindrical', pricePerFt: 140 },
       { name: 'GI square tube 60×60', shape: 'square', pricePerFt: 165 },
     ],
+    agents: [
+      { name: 'Vikram Shinde', email: 'vikram.agent@sunrisesolar.in', phone: '+91 98221 54321', jobTitle: 'Senior Field Engineer' },
+      { name: 'Pooja Patil', email: 'pooja.agent@sunrisesolar.in', phone: '+91 98221 98765', jobTitle: 'Site Surveyor & Inspector' },
+    ],
     clients: [
-      { key: 'ravi', name: 'Ravi Kumar', email: 'ravi.kumar@example.com', phone: '+91 99877 66554', address: '12 MG Road, Camp, Pune, Maharashtra 411001', notes: 'Monthly bill around ₹6,500. Wants net metering.' },
-      { key: 'school', name: 'Green Valley School', email: 'office@greenvalley.edu.in', phone: '+91 20 2729 4400', address: 'Survey 44, Wakad, Pune, Maharashtra 411057', notes: 'Trust-run school; decision by the managing committee.' },
-      { key: 'mehta', name: 'Mehta Textiles', email: 'accounts@mehtatextiles.in', phone: '+91 98500 77120', address: 'Plot 18, MIDC Bhosari, Pune, Maharashtra 411026' },
-      { key: 'priya', name: 'Priya Deshmukh', email: 'priya.d@example.com', phone: '+91 90110 23456', address: 'B-402 Lotus Residency, Kothrud, Pune, Maharashtra 411038' },
+      {
+        key: 'ravi',
+        name: 'Ravi Kumar',
+        email: 'ravi.kumar@example.com',
+        phone: '+91 99877 66554',
+        address: '12 MG Road, Camp, Pune, Maharashtra 411001',
+        consumerNumber: '020014589231',
+        kwRequired: 5,
+        source: 'Website Lead',
+        referredBy: { name: 'Amit Joshi', phone: '+91 98220 11223' },
+        notes: 'Monthly bill around ₹6,500. Wants net metering with 5kW rooftop setup.',
+        documents: [
+          { name: 'MSEDCL_Electricity_Bill_Latest.pdf', url: '/uploads/sample-bill.pdf', size: 245000, mimetype: 'application/pdf' },
+          { name: 'Terrace_Photo_South.jpg', url: '/uploads/sample-roof.jpg', size: 1250000, mimetype: 'image/jpeg' },
+        ],
+      },
+      {
+        key: 'school',
+        name: 'Green Valley School',
+        email: 'office@greenvalley.edu.in',
+        phone: '+91 20 2729 4400',
+        address: 'Survey 44, Wakad, Pune, Maharashtra 411057',
+        consumerNumber: '020098471203',
+        kwRequired: 30,
+        source: 'Referral',
+        referredBy: { name: 'Dr. S. Kulkarni', phone: '+91 94220 33445' },
+        notes: 'Trust-run school; 3-phase LT commercial connection, high daytime consumption.',
+        documents: [
+          { name: 'Sanction_Letter_30kW.pdf', url: '/uploads/sample-sanction.pdf', size: 180000, mimetype: 'application/pdf' },
+        ],
+      },
+      {
+        key: 'mehta',
+        name: 'Mehta Textiles',
+        email: 'accounts@mehtatextiles.in',
+        phone: '+91 98500 77120',
+        address: 'Plot 18, MIDC Bhosari, Pune, Maharashtra 411026',
+        consumerNumber: '020077182901',
+        kwRequired: 50,
+        source: 'Industrial Expo 2026',
+        notes: 'Industrial tin-shed rooftop. Wants high efficiency bifacial panels.',
+      },
+      {
+        key: 'priya',
+        name: 'Priya Deshmukh',
+        email: 'priya.d@example.com',
+        phone: '+91 90110 23456',
+        address: 'B-402 Lotus Residency, Kothrud, Pune, Maharashtra 411038',
+        consumerNumber: '020033445566',
+        kwRequired: 3,
+        source: 'Google Search',
+        referredBy: { name: 'Ravi Kumar', phone: '+91 99877 66554' },
+        notes: 'Residential flat owner with private roof rights, seeking PM Surya Ghar subsidy.',
+      },
     ],
     designs: [
       { client: 'ravi', name: 'Kumar residence – 5 kW rooftop', status: 'won', summary: { kwp: 5.4, panels: 10, cost: 268000, annualKwh: 7850 }, data: site('12 MG Road, Camp, Pune, Maharashtra 411001', 18.51652, 73.87843, rect(11, 8), 6.5) },
@@ -82,7 +138,7 @@ export const COMPANIES = [
       taxId: '29AAGCG5678K1Z2',
       plan: 'starter',
       limits: { maxClients: 25, maxDesigns: 50 },
-      features: { pdfBranding: true, excelImport: false },
+      features: { pdfBranding: true, excelImport: true },
       theme: { primary: '#047857', accent: '#facc15' },
       signatoryName: 'Karthik Rao',
       signatoryTitle: 'Managing Partner',
@@ -102,10 +158,41 @@ export const COMPANIES = [
       { name: 'HDG C-channel 41×41', shape: 'square', pricePerFt: 150 },
       { name: 'GI round pipe 1.5"', shape: 'cylindrical', pricePerFt: 118 },
     ],
+    agents: [
+      { name: 'Chethan Gowda', email: 'chethan.agent@greenvolt.in', phone: '+91 98451 22334', jobTitle: 'Installation Supervisor' },
+    ],
     clients: [
-      { key: 'nair', name: 'Suresh Nair', email: 'suresh.nair@example.com', phone: '+91 98450 11223', address: '88, 4th Cross, Indiranagar, Bengaluru, Karnataka 560038' },
-      { key: 'cafe', name: 'Third Wave Bakehouse', email: 'owner@thirdwavebakehouse.in', phone: '+91 80 4100 9090', address: '12 Church Street, Bengaluru, Karnataka 560001' },
-      { key: 'apts', name: 'Lakeview Apartments Owners Association', email: 'secretary@lakeviewaoa.in', address: 'Hebbal Kempapura, Bengaluru, Karnataka 560024' },
+      {
+        key: 'nair',
+        name: 'Suresh Nair',
+        email: 'suresh.nair@example.com',
+        phone: '+91 98450 11223',
+        address: '88, 4th Cross, Indiranagar, Bengaluru, Karnataka 560038',
+        consumerNumber: 'BESCOM-883921',
+        kwRequired: 6,
+        source: 'Social Media',
+        notes: 'Villa owner. Requires clean installation with concealed piping.',
+      },
+      {
+        key: 'cafe',
+        name: 'Third Wave Bakehouse',
+        email: 'owner@thirdwavebakehouse.in',
+        phone: '+91 80 4100 9090',
+        address: '12 Church Street, Bengaluru, Karnataka 560001',
+        consumerNumber: 'BESCOM-110293',
+        kwRequired: 10,
+        source: 'Direct Walk-in',
+      },
+      {
+        key: 'apts',
+        name: 'Lakeview Apartments Owners Association',
+        email: 'secretary@lakeviewaoa.in',
+        address: 'Hebbal Kempapura, Bengaluru, Karnataka 560024',
+        consumerNumber: 'BESCOM-554433',
+        kwRequired: 20,
+        source: 'Referral',
+        notes: 'Common utility lighting & water pumps offset.',
+      },
     ],
     designs: [
       { client: 'nair', name: 'Nair villa – 6 kW', status: 'won', summary: { kwp: 5.94, panels: 11, cost: 294000, annualKwh: 8900 }, data: site('88, 4th Cross, Indiranagar, Bengaluru, Karnataka 560038', 12.97194, 77.64115, rect(12, 9), 7) },
@@ -130,7 +217,8 @@ export const COMPANIES = [
     },
     panels: [{ brand: 'Adani Solar', model: 'Shine TOPCon 575', watts: 575, manufactureYear: 2026, warrantyYears: 30, length: 2.28, width: 1.13, price: 16500 }],
     pillars: [{ name: 'GI square tube 60×60', shape: 'square', pricePerFt: 170 }],
-    clients: [{ key: 'warehouse', name: 'Konkan Cold Storage', email: 'ops@konkancold.in', address: 'Taloja MIDC, Navi Mumbai, Maharashtra 410208' }],
+    agents: [],
+    clients: [{ key: 'warehouse', name: 'Konkan Cold Storage', email: 'ops@konkancold.in', address: 'Taloja MIDC, Navi Mumbai, Maharashtra 410208', consumerNumber: 'MSEDCL-990011', kwRequired: 100 }],
     designs: [{ client: 'warehouse', name: 'Konkan Cold Storage – roof 1', status: 'draft' }],
   },
 ];

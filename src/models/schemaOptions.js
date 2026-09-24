@@ -12,4 +12,7 @@ export const schemaOptions = {
   },
 };
 
+/** Same API shape for embedded documents (installation steps, log entries). */
+export const subSchemaOptions = { toJSON: schemaOptions.toJSON };
+
 export const text = (max = 200, extra = {}) => ({ type: String, trim: true, maxlength: max, default: '', ...extra });
