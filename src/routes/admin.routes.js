@@ -17,6 +17,8 @@ router.post('/plan-requests/:id/approve', validate(S.planRequestApproveSchema), 
 router.post('/plan-requests/:id/reject', validate(S.planRequestRejectSchema), planRequests.adminReject);
 
 router.get('/stats', admin.stats);
+router.get('/counts', admin.counts);
+router.post('/designs/cleanup-drafts', admin.cleanupDraftDesigns);
 router.get('/companies', admin.listCompanies);
 router.post('/companies', validate(S.adminCompanyCreateSchema), admin.createCompany);
 router.patch('/companies/:id', validate(S.adminCompanyUpdateSchema), admin.updateCompany);

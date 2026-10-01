@@ -1,4 +1,4 @@
-import { ROLES, TENANT_ROLES } from '../constants/index.js';
+import { ROLES, STAFF_PERMISSION_ACTIONS, TENANT_ROLES } from '../constants/index.js';
 import { Company, User } from '../models/index.js';
 import { forbidden, unauthorized } from '../utils/HttpError.js';
 import { verifyMapToken, verifyToken } from '../utils/token.js';
@@ -26,7 +26,7 @@ async function loadFromClaims(req, claims) {
     // super admin: tokens carry a session id too, so logging out really ends them (older tokens without one still work until they expire)
     throw unauthorized('You were signed out. Sign in again.');
   }
-  if (user.role === ROLES.AGENT && !user.active) throw unauthorized('This account has been deactivated');
+  if ((user.role === ROLES.AGENT || user.role === ROLES.CLIENT) && !user.active) throw unauthorized('This account has been deactivated');
   if (TENANT_ROLES.includes(user.role)) {
     const company = await Company.findById(user.company);
     if (!company) throw unauthorized('Company no longer exists');
@@ -62,11 +62,54 @@ export async function authenticateMapAccess(req, res, next) {
   next();
 }
 
-export const requireRole = (role) => (req, res, next) => {
-  if (req.user?.role !== role) throw forbidden();
+export const requireRole = (...roles) => (req, res, next) => {
+  if (!roles.includes(req.user?.role)) throw forbidden();
   next();
 };
 
 export const superAdminOnly = [authenticate, requireRole(ROLES.SUPERADMIN)];
 export const companyOnly = [authenticate, requireRole(ROLES.COMPANY)];
 export const agentOnly = [authenticate, requireRole(ROLES.AGENT)];
+export const clientOnly = [authenticate, requireRole(ROLES.CLIENT)];
+
+/**
+ * True for the company owner, or a staff (agent) account the company granted `<area>:<action>` to
+ * (e.g. `hasPermission(user, 'designs', 'create')`). CRUD-level: a staff account can be given any
+ * combination of view/create/update/delete within an area, independently.
+ */
+export const hasPermission = (user, area, action) => user?.role === ROLES.COMPANY || (user?.role === ROLES.AGENT && user.permissions?.includes(`${area}:${action}`));
+
+/** True for the company owner, or a staff account granted at least one action within this area. */
+export const hasAreaAccess = (user, area) => user?.role === ROLES.COMPANY || (user?.role === ROLES.AGENT && STAFF_PERMISSION_ACTIONS.some((a) => user.permissions?.includes(`${area}:${a}`)));
+
+/** True for the company owner, or a staff account granted at least one action across any of these areas. */
+export const hasAnyAreaAccess = (user, ...areas) => areas.some((a) => hasAreaAccess(user, a));
+
+/** Bare middleware (assumes `authenticate` already ran) for gating one route within an already-mounted router. */
+export const permissionOnly = (area, action) => (req, res, next) => {
+  if (!hasPermission(req.user, area, action)) throw forbidden();
+  next();
+};
+
+/** Like `permissionOnly`, but passes if the user has `action` in ANY of these areas (e.g. a product is readable by 'designs:view' or 'catalog:view'). */
+export const permissionOnlyAny = (areas, action) => (req, res, next) => {
+  if (!areas.some((area) => hasPermission(req.user, area, action))) throw forbidden();
+  next();
+};
+
+/** A company workspace area, one specific CRUD action: the owner always gets in; a staff account needs that exact permission. */
+export const withPermission = (area, action) => [authenticate, permissionOnly(area, action)];
+
+/**
+ * Mount-level gate for a whole area's router: lets in anyone with at least one action granted in this
+ * area (view/create/update/delete) — the router's own routes then check the exact action each needs
+ * (see e.g. design.routes.js). Without this, a "create-only" staff account (no `view`) would never
+ * reach the POST route at all.
+ */
+export const withAreaAccess = (...areas) => [
+  authenticate,
+  (req, res, next) => {
+    if (!hasAnyAreaAccess(req.user, ...areas)) throw forbidden();
+    next();
+  },
+];

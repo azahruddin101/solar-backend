@@ -42,7 +42,11 @@ function recordFailure(key) {
 export async function companyView(user, company) {
   if (!company) return null;
   const payload = await ownerCompanyView(company);
-  if (user.role === ROLES.AGENT) return pick(payload, ['id', 'name', 'email', 'phone', 'logo', 'theme']);
+  // currency/tariff/otherCostPerKw/productUnits/features are plain operational settings (not sensitive
+  // business info like address or tax id), and several staff permissions (designs, billing, catalog) need
+  // them to work correctly — a staff session without them would show blank prices or the wrong currency.
+  if (user.role === ROLES.AGENT) return pick(payload, ['id', 'name', 'email', 'phone', 'logo', 'theme', 'currency', 'tariff', 'otherCostPerKw', 'productUnits', 'features']);
+  if (user.role === ROLES.CLIENT) return pick(payload, ['id', 'name', 'email', 'phone', 'address', 'website', 'taxId', 'logo', 'signature', 'qr', 'qrLabel', 'tagline', 'signatoryName', 'signatoryTitle', 'theme', 'currency', 'pdfTerms', 'features']);
   return payload;
 }
 
@@ -59,7 +63,7 @@ export async function login({ email, password, ip, userAgent, replaceSessions = 
     recordFailure(key);
     throw unauthorized('Incorrect email or password');
   }
-  if (user.role === ROLES.AGENT && !user.active) throw forbidden('This account has been deactivated. Contact your company.');
+  if ((user.role === ROLES.AGENT || user.role === ROLES.CLIENT) && !user.active) throw forbidden('This account has been deactivated. Contact your company.');
   let company = null;
   if (TENANT_ROLES.includes(user.role)) {
     company = await Company.findById(user.company);

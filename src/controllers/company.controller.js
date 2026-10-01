@@ -14,6 +14,12 @@ export async function updateCompany(req, res) {
   res.json(await companyPayload(req.company));
 }
 
+/** Product units and default pricing only — the slice of company settings staff with the "catalog" permission may change. Returns only that slice: a catalog-only staff account has no read access to the rest of the company's profile. */
+export async function updateCatalogSettings(req, res) {
+  const company = await companyService.updateCatalogSettings(req.company, req.body);
+  res.json({ currency: company.currency, tariff: company.tariff, otherCostPerKw: company.otherCostPerKw, productUnits: company.productUnits });
+}
+
 export async function uploadAsset(req, res) {
   res.json(await assetService.saveAsset(req.company, req.params.kind, req.file));
 }

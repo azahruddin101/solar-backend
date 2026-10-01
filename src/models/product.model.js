@@ -17,6 +17,7 @@ const productSchema = new mongoose.Schema(
     hsnCode: text(20), // GST Harmonized System of Nomenclature code
     unit: text(20, { default: 'Piece', set: capFirst }), // from the company’s product-units list
     price: { type: Number, min: [0, 'Price cannot be negative'], default: 0 }, // per unit
+    gstPercent: { type: Number, min: 0, max: 100, default: 18 }, // GST rate for invoices and proposals
     quantity: { type: Number, min: [0, 'Quantity cannot be negative'], default: 0 }, // stock on hand
     warrantyYears: { type: Number, min: 0, max: 60, default: 0 },
     description: text(1000),

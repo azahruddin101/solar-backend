@@ -1,6 +1,6 @@
 // Request schemas, one per form/endpoint. Objects are "loose": fields not listed here pass through untouched
 // (the services still pick what they accept), while every listed field is checked and normalised.
-import { PILLAR_SHAPES, PRODUCT_TYPES, STEP_STATUS, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS } from '../constants/index.js';
+import { CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, PAYMENT_MODES, PILLAR_SHAPES, PRODUCT_TYPES, STAFF_PERMISSIONS, STEP_PRIORITIES, STEP_STATUS, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS } from '../constants/index.js';
 import * as f from './common.js';
 
 const { z } = f;
@@ -20,6 +20,9 @@ export const clientSchema = obj({
   email: f.emailOptional,
   phone: f.phoneOptional,
   pan: f.panOptional,
+  gstNumber: f.gstinOptional,
+  projectType: z.enum(CLIENT_PROJECT_TYPES).optional(),
+  roofType: z.union([z.enum(CLIENT_ROOF_TYPES), z.literal('')]).optional(),
   address: f.textOptional(400, 'Address'),
   notes: f.textOptional(1000, 'Notes'),
   consumerNumber: f.consumerNumberOptional,
@@ -41,8 +44,15 @@ const companyProfile = {
   pan: f.panOptional,
 };
 
+/** Invoice numbers: fixed part + next running number typed with its leading zeros ("INVCMP2026" + "0001"). */
+const invoiceNumbering = obj({
+  prefix: f.invoicePrefixOptional,
+  next: f.invoiceNextRequired,
+});
+
 export const companySelfSchema = obj({
   ...companyProfile,
+  invoiceNumbering: invoiceNumbering.optional(),
   signatoryName: f.personNameOptional,
   signatoryTitle: f.textOptional(80, 'Title'),
   qrLabel: f.textOptional(80, 'QR label'),
@@ -50,6 +60,14 @@ export const companySelfSchema = obj({
   currency: f.currencyCode.optional(),
   tariff: f.num({ min: 0, max: 1000, label: 'Tariff' }).optional(),
   otherCostPerKw: f.num({ min: 0, max: 1e7, label: 'Other cost per kW' }).optional(),
+}).partial();
+
+/** The narrow slice of company settings a staff member with the "catalog" permission may change. */
+export const catalogSettingsSchema = obj({
+  currency: f.currencyCode.optional(),
+  tariff: f.num({ min: 0, max: 1000, label: 'Tariff' }).optional(),
+  otherCostPerKw: f.num({ min: 0, max: 1e7, label: 'Other cost per kW' }).optional(),
+  productUnits: strArray(30, 20).optional(),
 }).partial();
 
 const limits = obj({
@@ -82,8 +100,8 @@ export const planUpdateSchema = planSchema.partial();
 
 /* ───────────── agents ───────────── */
 
-export const agentCreateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.newPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional() });
-export const agentUpdateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.optionalNewPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional() }).partial();
+export const agentCreateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.newPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), permissions: strArray(STAFF_PERMISSIONS.length, 30).optional() });
+export const agentUpdateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.optionalNewPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), permissions: strArray(STAFF_PERMISSIONS.length, 30).optional() }).partial();
 
 /* ───────────── catalog ───────────── */
 
@@ -92,8 +110,15 @@ export const categorySchema = obj({
   description: f.textOptional(300, 'Description'),
   type: z.enum(PRODUCT_TYPES, 'Invalid category type').optional(),
   specKeys: strArray(40).optional(),
+  parent: z.union([f.objectIdString, z.literal(''), z.null()]).optional(), // '' or null: not under any parent category
 });
 export const categoryUpdateSchema = categorySchema.partial();
+
+export const parentCategorySchema = obj({
+  name: f.textRequired(60, 'Parent category name'),
+  description: f.textOptional(300, 'Description'),
+});
+export const parentCategoryUpdateSchema = parentCategorySchema.partial();
 
 const spec = obj({ key: z.string().trim().max(60, 'Specification name is too long'), value: z.string().trim().max(200, 'Specification value is too long').optional() });
 const year = new Date().getFullYear() + 1;
@@ -107,6 +132,7 @@ export const productSchema = obj({
   hsnCode: f.hsnOptional,
   unit: f.textOptional(20, 'Unit'),
   price: f.numOptional({ min: 0, max: 1e9, label: 'Price' }),
+  gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
   quantity: f.numOptional({ min: 0, max: 1e9, label: 'Quantity' }),
   warrantyYears: f.numOptional({ min: 0, max: 60, int: true, label: 'Warranty' }),
   description: f.textOptional(1000, 'Description'),
@@ -135,6 +161,7 @@ const stepFields = {
   description: f.textOptional(400, 'Description'),
   role: f.textOptional(40, 'Role'),
   assignee: f.objectIdOrBlank,
+  priority: z.enum(STEP_PRIORITIES, 'Invalid step priority').optional(),
 };
 export const stepCreateSchema = obj(stepFields);
 export const stepUpdateSchema = obj({
@@ -169,6 +196,15 @@ export const ticketStatusSchema = obj({ status: z.enum(TICKET_STATUS, 'Invalid t
 
 export const designCreateSchema = obj({ client: f.objectIdString, name: f.textOptional(120, 'Design name') });
 
+export const designSendForReviewSchema = obj({
+  message: f.textOptional(2000, 'Message to client'),
+});
+
+export const portalProposalResponseSchema = obj({
+  decision: z.enum(CLIENT_PROPOSAL_DECISION, 'Choose accept, reject, or request changes'),
+  note: f.textRequired(2000, 'Note'),
+});
+
 /* ───────────── plan requests ───────────── */
 
 const requestedLimits = obj({
@@ -192,3 +228,42 @@ export const planRequestApproveSchema = obj({
   adminNotes: f.textOptional(2000, 'Notes'),
 });
 export const planRequestRejectSchema = obj({ adminNotes: f.textOptional(2000, 'Notes') });
+
+/* ───────────── installation charges ───────────── */
+
+export const installationChargeSchema = obj({
+  name: f.textRequired(80, 'Charge name'),
+  description: f.textOptional(300, 'Description'),
+  defaultPrice: f.numOptional({ min: 0, max: 1e9, label: 'Default price' }),
+  gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
+});
+
+/* ───────────── billing ───────────── */
+
+export const paymentSchema = obj({
+  amount: f.num({ min: 0.01, max: 1e10, label: 'Amount' }),
+  mode: z.enum(PAYMENT_MODES, 'Choose how the payment was made'),
+  reference: f.textOptional(80, 'Reference'),
+  note: f.textOptional(300, 'Note'),
+  receivedOn: z.string().optional(),
+});
+
+export const invoiceCreateSchema = obj({
+  pricing: z.any().optional(),
+  termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
+});
+
+/** An invoice with no proposal: who it is for, a title, and the priced lines. `client` optionally links an existing client. */
+export const directInvoiceSchema = obj({
+  client: z.string().optional().nullable(),
+  billTo: obj({
+    name: f.orgNameRequired,
+    phone: f.phoneOptional,
+    email: f.emailOptional,
+    address: f.textOptional(400, 'Address'),
+    gstNumber: f.gstinOptional,
+  }),
+  title: f.textOptional(160, 'Title'),
+  pricing: z.any(),
+  termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
+});

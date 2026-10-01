@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { PROJECT_STATUS, STEP_STATUS } from '../constants/index.js';
+import { DEFAULT_STEP_PRIORITY, PROJECT_STATUS, STEP_PRIORITIES, STEP_STATUS } from '../constants/index.js';
 import { activityLogSchema } from './activityLog.schema.js';
 import { schemaOptions, subSchemaOptions, text } from './schemaOptions.js';
 
@@ -9,6 +9,7 @@ const stepSchema = new mongoose.Schema({
   name: { type: String, required: [true, 'Step name is required'], trim: true, maxlength: 80 },
   description: text(400),
   role: text(40), // copied from the template — who should do this step
+  priority: { type: String, enum: STEP_PRIORITIES, default: DEFAULT_STEP_PRIORITY },
   assignee: { type: ObjectId, ref: 'User', default: null },
   status: { type: String, enum: STEP_STATUS, default: 'pending' },
   startedAt: { type: Date, default: null },

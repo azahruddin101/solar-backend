@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { COMPANY_STATUS, DEFAULT_AGENT_ROLES, DEFAULT_PRODUCT_UNITS } from '../constants/index.js';
+import { COMPANY_STATUS, DEFAULT_AGENT_ROLES, DEFAULT_PRODUCT_UNITS, DEFAULT_STEP_PRIORITY, STEP_PRIORITIES } from '../constants/index.js';
 import { capFirst } from '../utils/text.js';
 import { schemaOptions, subSchemaOptions, text } from './schemaOptions.js';
 
@@ -10,6 +10,7 @@ const installationStepSchema = new mongoose.Schema(
     name: { type: String, required: [true, 'Step name is required'], trim: true, maxlength: 80 },
     description: text(400),
     role: text(40), // agent role that should do this step (from the company's agentRoles list)
+    priority: { type: String, enum: STEP_PRIORITIES, default: DEFAULT_STEP_PRIORITY },
   },
   subSchemaOptions,
 );
@@ -64,6 +65,14 @@ const companySchema = new mongoose.Schema(
     tagline: text(60, { default: 'Clean energy for a brighter tomorrow' }), // script lettering on the PDF cover
     pdfTerms: text(30000, { trim: false }), // sanitised HTML from the rich text editor (utils/richText.js)
 
+    // invoice numbers: `${prefix}${next padded to width}` — see services/invoiceNumber.service.js.
+    // `next` is reserved with an atomic $inc at generation time; null = never set, continue the legacy Counter.
+    invoiceNumbering: {
+      prefix: text(20, { default: 'INV-' }),
+      width: { type: Number, default: 4, min: 1, max: 10 },
+      next: { type: Number, default: null, min: 1 },
+    },
+
     // installation workflow template: copied into a project when an installation starts
     installationSteps: [installationStepSchema],
 
@@ -75,6 +84,7 @@ const companySchema = new mongoose.Schema(
     // “per piece”, “per nos”, … — offered when adding catalog products (general categories)
     productUnits: { type: [{ type: String, trim: true, maxlength: 20, set: capFirst }], default: () => [...DEFAULT_PRODUCT_UNITS] },
     agentRoles: { type: [{ type: String, trim: true, maxlength: 40 }], default: () => [...DEFAULT_AGENT_ROLES] },
+    parentCategoriesSeeded: { type: Boolean, default: false }, // the default parent categories were created (see parentCategory.migration.js)
   },
   schemaOptions,
 );

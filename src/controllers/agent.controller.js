@@ -4,6 +4,10 @@ export async function list(req, res) {
   res.json(await agentService.listAgents(req.company));
 }
 
+export async function analytics(req, res) {
+  res.json(await agentService.teamAnalytics(req.company));
+}
+
 export async function create(req, res) {
   res.status(201).json(await agentService.createAgent(req.company, req.body));
 }

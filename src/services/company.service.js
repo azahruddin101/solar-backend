@@ -1,8 +1,9 @@
 // Companies: the super admin's management operations and the company's own profile.
 import mongoose from 'mongoose';
-import { DEFAULT_AGENT_ROLES, ROLES } from '../constants/index.js';
-import { Category, Client, Company, Design, Package, Plan, Product, Project, User } from '../models/index.js';
+import { DEFAULT_AGENT_ROLES, DEFAULT_STEP_PRIORITY, ROLES, STEP_PRIORITIES } from '../constants/index.js';
+import { Category, Client, Company, Design, ParentCategory, Invoice, InstallationCharge, Payment, Counter, Package, Plan, Product, Project, User } from '../models/index.js';
 import { applyPlanLimitsToCompany, planSummary } from './plan.service.js';
+import { parseInvoiceNumbering } from './invoiceNumber.service.js';
 import { assignPlanAsAdmin, ensureCompanySubscription, subscriptionView } from './subscription.service.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { hashPassword } from '../utils/password.js';
@@ -205,7 +206,12 @@ export async function deleteCompany(id) {
     Client.deleteMany(filter),
     Product.deleteMany(filter),
     Category.deleteMany(filter),
+    ParentCategory.deleteMany(filter),
     Package.deleteMany(filter),
+    InstallationCharge.deleteMany(filter),
+    Payment.deleteMany(filter),
+    Invoice.deleteMany(filter),
+    Counter.deleteMany(filter),
     User.deleteMany(filter),
   ]);
   await deleteTicketsForCompany(company._id);
@@ -220,8 +226,26 @@ export async function updateOwnCompany(company, body) {
   if (body?.theme) Object.assign(company.theme, pick(body.theme, ['primary', 'accent']));
   if (body?.productUnits !== undefined) company.productUnits = cleanProductUnits(body.productUnits);
   if (body?.agentRoles !== undefined) company.agentRoles = cleanAgentRoles(body.agentRoles);
+  if (body?.invoiceNumbering !== undefined) company.invoiceNumbering = await parseInvoiceNumbering(company, body.invoiceNumbering);
   await company.save();
   return company;
+}
+
+const CATALOG_SELF_EDITABLE = ['currency', 'tariff', 'otherCostPerKw'];
+
+/** The narrow slice of company settings a staff member with the "catalog" permission may change: product units and default pricing — never branding, contact info, or anything else `updateOwnCompany` covers. */
+export async function updateCatalogSettings(company, body) {
+  Object.assign(company, pick(body, CATALOG_SELF_EDITABLE));
+  if (body?.productUnits !== undefined) company.productUnits = cleanProductUnits(body.productUnits);
+  await company.save();
+  return company;
+}
+
+/** A step's priority: 'medium' when none is given. */
+export function stepPriority(value) {
+  if (value === undefined || value === null || value === '') return DEFAULT_STEP_PRIORITY;
+  if (!STEP_PRIORITIES.includes(value)) throw badRequest('Invalid step priority');
+  return value;
 }
 
 /** The installation step template. Replaced as a whole; running installations keep the steps they started with. */
@@ -231,7 +255,7 @@ export async function updateInstallationSteps(company, body) {
   company.installationSteps = body.steps.map((s) => {
     const name = String(s?.name ?? '').trim();
     if (!name) throw badRequest('Step name is required');
-    return { name, description: s?.description, role: resolveAgentRole(company, s?.role) };
+    return { name, description: s?.description, role: resolveAgentRole(company, s?.role), priority: stepPriority(s?.priority) };
   });
   await company.save();
   return company.installationSteps;

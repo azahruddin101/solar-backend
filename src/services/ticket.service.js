@@ -2,14 +2,18 @@
 import mongoose from 'mongoose';
 import path from 'node:path';
 import { ROLES, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS, TICKET_STATUS_LABEL } from '../constants/index.js';
+import { hasPermission } from '../middlewares/auth.middleware.js';
 import { Ticket } from '../models/index.js';
 import { badRequest, forbidden, notFound } from '../utils/HttpError.js';
+import { parsePagination, toApiJSON } from '../utils/lean.js';
 import { objectId } from '../utils/validators.js';
 import { notifyTicketUpdate } from './notification.service.js';
 import { deleteFile } from './storage.service.js';
 
 const MAX_MESSAGES = 1000;
 const isAdmin = (user) => user.role === ROLES.SUPERADMIN;
+/** The company owner, or a staff account granted this exact CRUD action within "support". */
+const can = (user, action) => hasPermission(user, 'support', action);
 
 /* ───────────── helpers ───────────── */
 
@@ -17,9 +21,9 @@ function audit(ticket, user, action, message = '') {
   ticket.logs.push({ action, by: user._id, byName: user.name || user.email, byRole: user.role, message });
 }
 
-/** Company owners see their own company's tickets; the super admin sees all. Agents have no access. */
+/** Company owners (or staff who can at least view support) see their own company's tickets; the super admin sees all. */
 async function load(user, id) {
-  if (![ROLES.SUPERADMIN, ROLES.COMPANY].includes(user.role)) throw forbidden();
+  if (!isAdmin(user) && !can(user, 'view')) throw forbidden();
   const ticket = await Ticket.findById(objectId(id, 'Ticket'));
   if (!ticket || (!isAdmin(user) && String(ticket.company) !== String(user.company))) throw notFound('Ticket');
   return ticket;
@@ -60,25 +64,38 @@ function searchFilter(q) {
   return { $or: or };
 }
 
-export async function listTickets(user, { status, q } = {}) {
-  if (![ROLES.SUPERADMIN, ROLES.COMPANY].includes(user.role)) throw forbidden();
+export async function listTickets(user, { status, q, page, limit } = {}) {
+  if (!isAdmin(user) && !can(user, 'view')) throw forbidden();
   const filter = isAdmin(user) ? {} : { company: user.company };
   if (TICKET_STATUS.includes(status)) filter.status = status;
   const search = searchFilter(q);
   if (search) Object.assign(filter, search);
-  const rows = await Ticket.find(filter)
-    .select({ logs: 0, messages: { $slice: -1 } })
-    .populate('company', 'name logo')
-    .populate('createdBy', 'name email')
-    .sort({ lastMessageAt: -1 })
-    .limit(200);
+  const { page: p, limit: l, skip } = parsePagination({ page, limit });
+  const [rows, total] = await Promise.all([
+    Ticket.find(filter)
+      .select({ logs: 0, messages: { $slice: -1 } })
+      .populate('company', 'name logo')
+      .populate('createdBy', 'name email')
+      .sort({ lastMessageAt: -1 })
+      .skip(skip)
+      .limit(l)
+      .lean(),
+    Ticket.countDocuments(filter),
+  ]);
   const counts = await Ticket.aggregate([{ $match: { _id: { $in: rows.map((r) => r._id) } } }, { $project: { n: { $size: '$messages' } } }]);
   const sizes = new Map(counts.map((c) => [String(c._id), c.n]));
-  return rows.map((r) => ({ ...present(r, user), messageCount: sizes.get(String(r._id)) || 0 }));
+  const items = rows.map((r) => {
+    const t = toApiJSON(r);
+    t.unread = isAdmin(user) ? r.adminUnread : r.companyUnread;
+    delete t.companyUnread;
+    delete t.adminUnread;
+    return { ...t, messageCount: sizes.get(String(r._id)) || 0 };
+  });
+  return { items, total, page: p, limit: l };
 }
 
 export async function unreadCount(user) {
-  if (![ROLES.SUPERADMIN, ROLES.COMPANY].includes(user.role)) return 0;
+  if (!isAdmin(user) && !can(user, 'view')) return 0;
   const field = isAdmin(user) ? 'adminUnread' : 'companyUnread';
   return Ticket.countDocuments({ ...(isAdmin(user) ? {} : { company: user.company }), [field]: { $gt: 0 } });
 }
@@ -98,9 +115,9 @@ export async function getTicket(user, id) {
 /* ───────────── writes ───────────── */
 
 export async function createTicket(user, body, files) {
-  if (user.role !== ROLES.COMPANY) {
+  if (!can(user, 'create')) {
     await removeUploads(files);
-    throw forbidden('Only a company account can open a ticket');
+    throw forbidden('Only the company owner or a staff account with the support permission can open a ticket');
   }
   try {
     const subject = cleanText(body?.subject, 150);
@@ -126,6 +143,10 @@ export async function createTicket(user, body, files) {
 }
 
 export async function addMessage(user, id, body, files) {
+  if (!isAdmin(user) && !can(user, 'update')) {
+    await removeUploads(files);
+    throw forbidden();
+  }
   try {
     const ticket = await load(user, id);
     const text = cleanText(body?.body ?? body?.message, 4000);
@@ -170,6 +191,7 @@ export async function addMessage(user, id, body, files) {
 /** Admin: any status. Company: close its ticket, or reopen a resolved/closed one. */
 export async function setStatus(user, id, status) {
   if (!TICKET_STATUS.includes(status)) throw badRequest('Invalid ticket status');
+  if (!isAdmin(user) && !can(user, 'update')) throw forbidden();
   const ticket = await load(user, id);
   if (status === ticket.status) return getTicket(user, id);
   if (!isAdmin(user)) {

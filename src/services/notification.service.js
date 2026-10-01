@@ -4,6 +4,7 @@ import { ROLES, STEP_STATUS_LABEL } from '../constants/index.js';
 import { env } from '../config/env.js';
 import { Design, Notification, User } from '../models/index.js';
 import { isOneSignalConfigured, sendPush } from './onesignal.service.js';
+import { parsePagination, toApiJSONList } from '../utils/lean.js';
 
 /** Save the inbox rows; a duplicate (same event, same user) is silently skipped by the unique index. */
 async function record(audiences, entry) {
@@ -70,17 +71,26 @@ async function sendStepStatusChange({ projectId, companyId, designId, stepId, st
 
 const PAGE = 30;
 
-/** Newest first. `before` (ISO date of the last item seen) pages further back. */
-export async function listFor(user, { before, limit } = {}) {
-  const take = Math.min(Math.max(Number(limit) || PAGE, 1), 100);
+/** Newest first. Default: `page` + `limit`. Legacy: `before` (ISO cursor) + `limit`. */
+export async function listFor(user, { before, page, limit } = {}) {
   const filter = { user: user._id };
-  const cursor = before ? new Date(before) : null;
-  if (cursor && !Number.isNaN(cursor.getTime())) filter.createdAt = { $lt: cursor };
-  const [rows, unread] = await Promise.all([
-    Notification.find(filter).sort({ createdAt: -1, _id: -1 }).limit(take + 1),
-    Notification.countDocuments({ user: user._id, readAt: null }),
+  const unread = await Notification.countDocuments({ user: user._id, readAt: null });
+
+  if (before) {
+    const take = Math.min(Math.max(Number(limit) || PAGE, 1), 100);
+    const cursor = new Date(before);
+    if (!Number.isNaN(cursor.getTime())) filter.createdAt = { $lt: cursor };
+    const rows = await Notification.find(filter).sort({ createdAt: -1, _id: -1 }).limit(take + 1).lean();
+    const hasMore = rows.length > take;
+    return { items: toApiJSONList(rows.slice(0, take)), hasMore, unread };
+  }
+
+  const { page: p, limit: l, skip } = parsePagination({ page, limit }, { defaultLimit: 10, maxLimit: 50 });
+  const [rows, total] = await Promise.all([
+    Notification.find(filter).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(l).lean(),
+    Notification.countDocuments(filter),
   ]);
-  return { items: rows.slice(0, take), hasMore: rows.length > take, unread };
+  return { items: toApiJSONList(rows), total, page: p, limit: l, unread };
 }
 
 export const unreadCount = (user) => Notification.countDocuments({ user: user._id, readAt: null });
@@ -122,4 +132,52 @@ async function sendTicketUpdate({ ticketId, companyId, ref, subject, title, body
   const message = { title, body: `${ref} · ${subject}: ${body}`.slice(0, 300), data: { event: 'ticket_update', ticketId } };
   await record(audiences, { ...message, company: companyId, type: 'ticket_update', eventKey: `ticket:${eventId}` });
   await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...message, idempotencyKey: `ticket:${eventId}` });
+}
+
+const PROPOSAL_RESPONSE_LABEL = {
+  accepted: 'accepted',
+  rejected: 'declined',
+  changes_requested: 'asked for changes on',
+};
+
+/** A client responded to a proposed design — notify the company owner(s). */
+export function notifyProposalResponse(payload) {
+  sendProposalResponse(payload).catch((e) => console.error(`[push] proposal response notification failed: ${e.message}`));
+}
+
+async function sendProposalResponse({ companyId, designId, designName, designType, decision, note, eventId }) {
+  const owners = await User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean();
+  const ownerIds = owners.map((u) => String(u._id));
+  if (!ownerIds.length) return;
+  const verb = PROPOSAL_RESPONSE_LABEL[decision] || 'responded to';
+  const designPath = designType === 'quick' ? `/proposal/${designId}` : `/design/${designId}/plan`;
+  const audiences = [{ userIds: ownerIds, path: designPath }];
+  const snippet = note ? `: ${note}` : '';
+  const message = {
+    title: 'Client responded to a proposal',
+    body: `${designName || 'A proposal'} was ${verb}${snippet}`.slice(0, 400),
+    data: { event: 'proposal_client_response', designId, decision },
+  };
+  await record(audiences, { ...message, company: companyId, type: 'proposal_client_response', eventKey: `proposal-response:${eventId}` });
+  await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...message, idempotencyKey: `proposal-response:${eventId}` });
+}
+
+/** The company sent an updated proposal for the client to review again. */
+export function notifyClientProposalReadyForReview(payload) {
+  sendClientProposalReadyForReview(payload).catch((e) => console.error(`[push] client review invite failed: ${e.message}`));
+}
+
+async function sendClientProposalReadyForReview({ companyId, clientId, designId, designName, message, eventId }) {
+  const clientUsers = await User.find({ company: companyId, role: ROLES.CLIENT, client: clientId, active: true }).select('_id').lean();
+  const userIds = clientUsers.map((u) => String(u._id));
+  if (!userIds.length) return;
+  const audiences = [{ userIds, path: `/portal/${designId}` }];
+  const snippet = message ? `: ${message}` : '';
+  const msg = {
+    title: 'Updated proposal ready to review',
+    body: `${designName || 'Your proposal'} has been updated${snippet}`.slice(0, 400),
+    data: { event: 'proposal_ready_for_review', designId },
+  };
+  await record(audiences, { ...msg, company: companyId, type: 'proposal_ready_for_review', eventKey: `proposal-review:${eventId}` });
+  await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...msg, idempotencyKey: `proposal-review:${eventId}` });
 }

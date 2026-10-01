@@ -1,12 +1,11 @@
 import * as clientService from '../services/client.service.js';
 
 export async function list(req, res) {
-  res.json(await clientService.listClients(req.company));
+  res.json(await clientService.listClients(req.company, { page: req.query.page, limit: req.query.limit }));
 }
 
 export async function get(req, res) {
-  const client = await clientService.getClient(req.company, req.params.id);
-  res.json(client);
+  res.json(await clientService.getClientView(req.company, req.params.id));
 }
 
 export async function create(req, res) {
@@ -33,3 +32,12 @@ export async function uploadDoc(req, res) {
   });
 }
 
+
+export async function createLogin(req, res) {
+  res.status(201).json(await clientService.provisionClientLogin(req.company, req.params.id));
+}
+
+export async function removeLogin(req, res) {
+  await clientService.removeClientLogin(req.company, req.params.id);
+  res.json({ ok: true });
+}

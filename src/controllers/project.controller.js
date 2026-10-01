@@ -13,7 +13,7 @@ export async function updateSteps(req, res) {
 }
 
 export async function list(req, res) {
-  res.json(await projectService.listProjects(req.company));
+  res.json(await projectService.listProjects(req.company, { page: req.query.page, limit: req.query.limit }));
 }
 
 export async function start(req, res) {

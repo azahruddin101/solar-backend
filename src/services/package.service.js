@@ -85,11 +85,24 @@ function buildPackagePipeline(matchStage, sortStage = { $sort: { createdAt: -1 }
               as: '_cat',
             },
           },
+          // … and that category's parent category (for the grouped bill of materials)
+          {
+            $lookup: {
+              from: 'parentcategories',
+              localField: '_cat.parent',
+              foreignField: '_id',
+              as: '_parent',
+            },
+          },
           {
             $addFields: {
               _catName: {
                 $ifNull: [{ $toLower: { $arrayElemAt: ['$_cat.name', 0] } }, ''],
               },
+              _catLabel: { $ifNull: [{ $arrayElemAt: ['$_cat.name', 0] }, ''] },
+              _parentId: { $ifNull: [{ $toString: { $arrayElemAt: ['$_parent._id', 0] } }, ''] },
+              _parentName: { $ifNull: [{ $arrayElemAt: ['$_parent.name', 0] }, ''] },
+              _parentOrder: { $ifNull: [{ $arrayElemAt: ['$_parent.position', 0] }, 0] },
               // Flatten specs array to "key: value, key: value" string
               _specStr: {
                 $cond: {
@@ -112,7 +125,7 @@ function buildPackagePipeline(matchStage, sortStage = { $sort: { createdAt: -1 }
               },
             },
           },
-          { $project: { _cat: 0 } },
+          { $project: { _cat: 0, _parent: 0 } },
         ],
         as: '_products',
       },
@@ -145,8 +158,14 @@ function buildPackagePipeline(matchStage, sortStage = { $sort: { createdAt: -1 }
                   model: { $ifNull: ['$$prod.model', ''] },
                   watts: { $ifNull: ['$$prod.watts', 0] },
                   price: { $ifNull: ['$$prod.price', 0] },
+                  hsnCode: { $ifNull: ['$$prod.hsnCode', ''] },
+                  gstPercent: { $ifNull: ['$$prod.gstPercent', 0] },
                   type: { $ifNull: ['$$prod.type', ''] },
                   categoryName: { $ifNull: ['$$prod._catName', ''] },
+                  category: { $ifNull: ['$$prod._catLabel', ''] },
+                  parentId: { $ifNull: ['$$prod._parentId', ''] },
+                  parentName: { $ifNull: ['$$prod._parentName', ''] },
+                  parentOrder: { $ifNull: ['$$prod._parentOrder', 0] },
                   spec: { $ifNull: ['$$prod._specStr', ''] },
                 },
               },

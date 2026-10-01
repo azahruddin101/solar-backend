@@ -1,10 +1,16 @@
 export { AuthSession } from './authSession.model.js';
 export { Category } from './category.model.js';
+export { ParentCategory } from './parentCategory.model.js';
 export { Plan } from './plan.model.js';
 export { PlanRequest } from './planRequest.model.js';
 export { Client } from './client.model.js';
 export { Company } from './company.model.js';
+export { Counter } from './counter.model.js';
 export { Design } from './design.model.js';
+export { DesignVersion } from './designVersion.model.js';
+export { Invoice } from './invoice.model.js';
+export { Payment } from './payment.model.js';
+export { InstallationCharge } from './installationCharge.model.js';
 export { Package } from './package.model.js';
 export { Product } from './product.model.js';
 export { Project } from './project.model.js';

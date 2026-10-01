@@ -2,9 +2,10 @@
 // everything that happened. The company owner manages the whole project; agents work on their own steps.
 import { ROLES, STEP_STATUS } from '../constants/index.js';
 import { Design, Project, User } from '../models/index.js';
-import { resolveAgentRole } from './company.service.js';
+import { resolveAgentRole, stepPriority } from './company.service.js';
 import { notifyStepAssigned, notifyStepStatusChange } from './notification.service.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
+import { parsePagination, toApiJSONList } from '../utils/lean.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
 
@@ -232,9 +233,15 @@ async function getOwn(company, id) {
   return project;
 }
 
-/** Lists leave out the logs. */
-export function listProjects(company) {
-  return populate(Project.find({ company: company._id }).select('-logs').sort({ updatedAt: -1 }), ROLES.COMPANY);
+/** Lists leave out the logs. Paginated: pass `page`/`limit` (defaults to a single bounded page). */
+export async function listProjects(company, { page, limit } = {}) {
+  const filter = { company: company._id };
+  const { page: p, limit: l, skip } = parsePagination({ page, limit });
+  const [items, total] = await Promise.all([
+    populate(Project.find(filter).select('-logs').sort({ updatedAt: -1 }).skip(skip).limit(l), ROLES.COMPANY).lean(),
+    Project.countDocuments(filter),
+  ]);
+  return { items: toApiJSONList(items), total, page: p, limit: l };
 }
 
 export async function getProject(company, id) {
@@ -254,7 +261,7 @@ export async function startProject(company, user, body) {
     company: company._id,
     design: design._id,
     client: design.client,
-    steps: company.installationSteps.map((s) => ({ name: s.name, description: s.description, role: s.role || '' })),
+    steps: company.installationSteps.map((s) => ({ name: s.name, description: s.description, role: s.role || '', priority: s.priority })),
   });
   log(project, user, 'started');
   if (project.steps.length) await autoAssignStep(project, project.steps[0], company, user);
@@ -280,7 +287,7 @@ export async function addStep(company, user, id, body) {
   if (project.steps.length >= MAX_STEPS) throw badRequest(`An installation can have up to ${MAX_STEPS} steps`);
   const role = body?.role !== undefined ? resolveAgentRole(company, body.role) : '';
   const agent = await ownAgent(company, body?.assignee, role);
-  project.steps.push({ name: cleanName(body?.name), description: body?.description, role, assignee: agent?._id || null });
+  project.steps.push({ name: cleanName(body?.name), description: body?.description, role, priority: stepPriority(body?.priority), assignee: agent?._id || null });
   const step = project.steps.at(-1);
   log(project, user, 'step_added', step);
   if (agent) log(project, user, 'step_assigned', step, agent.name);
@@ -299,6 +306,7 @@ export async function updateStep(company, user, id, stepId, body) {
     log(project, user, 'step_renamed', step, `Was “${before}”`);
   }
   Object.assign(step, pick(body, ['description']));
+  if (body?.priority !== undefined) step.priority = stepPriority(body.priority);
   if (body?.role !== undefined) step.role = resolveAgentRole(company, body.role);
   const roleForAssign = step.role || '';
   if (body?.assignee !== undefined && String(body.assignee || '') !== String(step.assignee || '')) {

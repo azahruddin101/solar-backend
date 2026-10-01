@@ -1,4 +1,4 @@
-import { categoryService, designerCatalog, importPanels, productService } from '../services/catalog.service.js';
+import { categoryService, designerCatalog, importPanels, parentCategoryService, productService } from '../services/catalog.service.js';
 
 /** Same four handlers for every catalog resource. */
 const handlers = (service) => ({
@@ -14,9 +14,14 @@ const handlers = (service) => ({
 
 export const categories = handlers(categoryService);
 export const products = handlers(productService);
+export const parentCategories = { ...handlers(parentCategoryService), get: undefined };
 
 export async function reorderCategories(req, res) {
   res.json(await categoryService.reorder(req.company, req.body?.ids));
+}
+
+export async function reorderParentCategories(req, res) {
+  res.json(await parentCategoryService.reorder(req.company, req.body?.ids));
 }
 
 export async function importPanelRows(req, res) {

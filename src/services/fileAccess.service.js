@@ -14,8 +14,10 @@ export const LINK_TTL_MS = 10 * 60 * 1000;
 const DOC = /^[0-9a-f]{24}-doc-/; // client documents:   <companyId>-doc-…
 const STEP = /^[0-9a-f]{24}-step-/; // installation photos: <companyId>-step-…
 const TICKET = /^ticket-/; // support attachments: ticket-…
+const DESIGN_VERSION = /^[0-9a-f]{24}-design-/; // archived quotation PDFs: <companyId>-design-<designId>-v-…
+const INVOICE_PDF = /^[0-9a-f]{24}-invoice-/; // archived tax invoices: <companyId>-invoice-<invoiceId>-…
 
-export const isProtected = (name) => DOC.test(name) || STEP.test(name) || TICKET.test(name);
+export const isProtected = (name) => DOC.test(name) || STEP.test(name) || TICKET.test(name) || DESIGN_VERSION.test(name) || INVOICE_PDF.test(name);
 
 const key = () => crypto.createHash('sha256').update(`file-link:${env.jwtSecret}`).digest();
 const mac = (name, exp) => crypto.createHmac('sha256', key()).update(`${name}.${exp}`).digest('hex');
@@ -41,11 +43,15 @@ export async function assertCanOpen(user, name) {
   if (DOC.test(name)) {
     if (user.role === ROLES.COMPANY && String(user.company) === owner) return;
   } else if (STEP.test(name)) {
-    if (String(user.company) === owner) return; // the company's owner and its agents
+    if (user.role !== ROLES.CLIENT && String(user.company) === owner) return; // the company's owner and its agents (never a client)
   } else if (TICKET.test(name)) {
     if (user.role !== ROLES.COMPANY) throw forbidden();
     const ticket = await Ticket.findOne({ company: user.company, 'messages.attachments.url': `/uploads/${name}` }).select('_id').lean();
     if (ticket) return;
+  } else if (DESIGN_VERSION.test(name)) {
+    if (user.role === ROLES.COMPANY && String(user.company) === owner) return;
+  } else if (INVOICE_PDF.test(name)) {
+    if (user.role === ROLES.COMPANY && String(user.company) === owner) return;
   }
   throw forbidden('You do not have access to this file');
 }

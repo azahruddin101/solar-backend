@@ -68,6 +68,8 @@ export const orgNameRequired = required((v) => v.length >= 2 && ORG.test(v), 'En
 export const consumerNumberOptional = optional((v) => /^[A-Za-z0-9][A-Za-z0-9/-]{3,29}$/.test(v), 'Enter a valid consumer number (4–30 letters, digits, - or /)', { max: 30 });
 export const skuOptional = optional((v) => /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(v), 'SKU can only have letters, digits and . _ - /', { max: 60 });
 export const hsnOptional = optional((v) => /^\d{4}(\d{2}(\d{2})?)?$/.test(v), 'HSN code must be 4, 6 or 8 digits', { max: 8 });
+export const invoicePrefixOptional = optional((v) => /^[A-Za-z0-9/_.-]*$/.test(v), 'The fixed part can only have letters, digits and - / _ .', { max: 20 });
+export const invoiceNextRequired = required((v) => /^\d{1,10}$/.test(v) && Number(v) >= 1, 'Enter the next number as digits only, like 0001', { max: 10, blank: 'Enter the next invoice number' });
 export const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a colour like #1d4ed8');
 export const currencyCode = z.preprocess((v) => (typeof v === 'string' ? v.trim().toUpperCase() : v), z.string().regex(/^[A-Z]{3}$/, 'Use a 3-letter currency code, like INR'));
 

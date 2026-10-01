@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { CLIENT_PROJECT_TYPES, CLIENT_ROOF_TYPES } from '../constants/index.js';
 import { activityLogSchema } from './activityLog.schema.js';
 import { capWords } from '../utils/text.js';
 import { schemaOptions, text } from './schemaOptions.js';
@@ -11,6 +12,9 @@ const clientSchema = new mongoose.Schema(
     email: text(200, { lowercase: true }),
     phone: text(40),
     pan: text(10),
+    gstNumber: text(15, { uppercase: true }),
+    projectType: { type: String, enum: CLIENT_PROJECT_TYPES, default: 'residential' },
+    roofType: { type: String, enum: [...CLIENT_ROOF_TYPES, ''], default: '' },
     address: text(400),
     notes: text(1000),
     consumerNumber: text(80),

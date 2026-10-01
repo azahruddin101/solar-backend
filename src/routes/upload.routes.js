@@ -3,6 +3,7 @@
 // need the short-lived ?exp=&sig= from GET /api/files/link.
 import { Router } from 'express';
 import path from 'node:path';
+import { env } from '../config/env.js';
 import { isProtected, SAFE_NAME, validSignature } from '../services/fileAccess.service.js';
 import { openFile } from '../services/storage.service.js';
 
@@ -21,12 +22,15 @@ router.get('/:name', async (req, res) => {
 
   const ext = path.extname(name).toLowerCase();
   const inline = INLINE[ext];
+  // A PDF may be shown inline in our own app (e.g. the design version preview modal), so it needs framing
+  // allowed for our origins specifically — everything else keeps the blanket X-Frame-Options: DENY.
+  const framable = ext === '.pdf';
   res.set({
     'Content-Type': inline || 'application/octet-stream',
     'Cache-Control': locked ? 'private, max-age=300' : 'public, max-age=604800',
     'Cross-Origin-Resource-Policy': 'cross-origin',
     'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'DENY',
+    ...(framable ? { 'Content-Security-Policy': `frame-ancestors 'self' ${env.corsOrigins.join(' ')}` } : { 'X-Frame-Options': 'DENY' }),
     'Referrer-Policy': 'no-referrer',
     ...(process.env.NODE_ENV === 'production' && { 'Strict-Transport-Security': 'max-age=15552000; includeSubDomains' }),
     ...(!inline && { 'Content-Disposition': `attachment; filename="${name}"` }),

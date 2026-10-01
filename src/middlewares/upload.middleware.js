@@ -95,9 +95,9 @@ export const uploadImage = withStorage(
   (req, file) => `${req.company.id}-${req.params.kind}-${rand(6)}.${IMAGE_TYPES[file.mimetype]}`,
 );
 
-/** Client documents (bills, ID proofs, …): PNG, JPG, WebP or PDF, up to 10 MB. */
+/** Client documents (bills, ID proofs, …): PNG, JPG, WebP or PDF, up to 30 MB. */
 export const uploadDocument = withStorage(
-  memory({ fileSize: 10 * 1024 * 1024, files: 1 }, (req, file, cb) => (TICKET_FILE_TYPES[file.mimetype] ? cb(null, true) : cb(badRequest('Upload a PNG, JPG, WebP image or a PDF')))).single('file'),
+  memory({ fileSize: 30 * 1024 * 1024, files: 1 }, (req, file, cb) => (TICKET_FILE_TYPES[file.mimetype] ? cb(null, true) : cb(badRequest('Upload a PNG, JPG, WebP image or a PDF')))).single('file'),
   (req, file) => `${req.company.id}-doc-${rand(8)}.${TICKET_FILE_TYPES[file.mimetype]}`,
   IMAGES_AND_PDF,
 );
@@ -112,6 +112,20 @@ export const uploadAgentPhoto = withStorage(
 export const uploadStepPhoto = withStorage(
   memory({ fileSize: 5 * 1024 * 1024, files: 1 }, imageFilter).single('file'),
   (req, file) => `${req.company.id}-step-${rand(8)}.${IMAGE_TYPES[file.mimetype] || 'jpg'}`,
+);
+
+/** A design's quotation PDF, stored as a traceable version each time it is downloaded. */
+export const uploadDesignVersionPdf = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-design-${req.params.id}-v-${rand(8)}.pdf`,
+  ['application/pdf'],
+);
+
+/** Archived tax-invoice PDF (stored in S3 or local uploads). */
+export const uploadInvoicePdf = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-invoice-${req.params.id}-${rand(8)}.pdf`,
+  ['application/pdf'],
 );
 
 /** Support-ticket attachments: images or PDFs, up to 5 per message. */

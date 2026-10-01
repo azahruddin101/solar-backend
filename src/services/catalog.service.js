@@ -2,14 +2,15 @@
 // can carry free-form key/value specifications. A category can be marked as holding solar panels or poles;
 // its products are then picked up by the designer, so they also carry watt + size / shape + a price per foot.
 import { DEFAULT_CATEGORIES, DEFAULT_PANELS, DEFAULT_PILLARS, DEFAULT_PRODUCT_UNITS, PRODUCT_TYPES } from '../constants/index.js';
-import { Category, Package, Product } from '../models/index.js';
+import { Category, Package, ParentCategory, Product } from '../models/index.js';
+import { seedParentCategories } from '../migrations/parentCategory.migration.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { capFirst } from '../utils/text.js';
 import { objectId } from '../utils/validators.js';
 
 const MAX_SPECS = 40;
-const COMMON = ['name', 'brand', 'model', 'sku', 'hsnCode', 'price', 'quantity', 'warrantyYears', 'description'];
+const COMMON = ['name', 'brand', 'model', 'sku', 'hsnCode', 'price', 'gstPercent', 'quantity', 'warrantyYears', 'description'];
 const FIELDS = {
   general: [...COMMON, 'unit'],
   panels: [...COMMON, 'unit', 'watts', 'manufactureYear', 'length', 'width'],
@@ -89,6 +90,7 @@ async function applyCategory(company, category, body) {
   if (!name) throw badRequest('Category name is required');
   const twin = await Category.findOne({ company: company._id, _id: { $ne: category._id }, name }).collation({ locale: 'en', strength: 2 });
   if (twin) throw conflict('You already have a category with that name');
+  if (body?.parent !== undefined) category.parent = body.parent ? (await getParentCategory(company, body.parent))._id : null;
   if (body?.specKeys !== undefined) {
     if (!Array.isArray(body.specKeys)) throw badRequest('Invalid specification names');
     category.specKeys = [...new Set(body.specKeys.map((k) => String(k ?? '').trim()).filter(Boolean))].slice(0, MAX_SPECS);
@@ -98,6 +100,53 @@ async function applyCategory(company, category, body) {
   if (retyped) await Product.updateMany({ company: company._id, category: category._id }, { type: category.type });
   return category;
 }
+
+/* ───────────── parent categories ───────────── */
+
+async function getParentCategory(company, id) {
+  const parent = await ParentCategory.findOne({ _id: objectId(id, 'Parent category'), company: company._id });
+  if (!parent) throw notFound('Parent category');
+  return parent;
+}
+
+async function applyParentCategory(company, parent, body) {
+  Object.assign(parent, pick(body, ['name', 'description']));
+  const name = String(parent.name ?? '').trim();
+  if (!name) throw badRequest('Parent category name is required');
+  const twin = await ParentCategory.findOne({ company: company._id, _id: { $ne: parent._id }, name }).collation({ locale: 'en', strength: 2 });
+  if (twin) throw conflict('You already have a parent category with that name');
+  return parent.save();
+}
+
+export const parentCategoryService = {
+  /** In the company's own order; each with the number of categories filed under it. */
+  list: async (company) => {
+    const [parents, counts] = await Promise.all([
+      ParentCategory.find({ company: company._id }).sort({ position: 1, createdAt: 1, _id: 1 }),
+      Category.aggregate([{ $match: { company: company._id, parent: { $ne: null } } }, { $group: { _id: '$parent', n: { $sum: 1 } } }]),
+    ]);
+    const categories = new Map(counts.map((c) => [String(c._id), c.n]));
+    return parents.map((p) => ({ ...p.toJSON(), categories: categories.get(p.id) || 0 }));
+  },
+  create: async (company, body) => {
+    if ((await ParentCategory.countDocuments({ company: company._id })) >= 20) throw badRequest('You can have up to 20 parent categories');
+    const last = await ParentCategory.findOne({ company: company._id }).sort({ position: -1 });
+    return { ...(await applyParentCategory(company, new ParentCategory({ company: company._id, position: (last?.position || 0) + 1 }), body)).toJSON(), categories: 0 };
+  },
+  update: async (company, id, body) => applyParentCategory(company, await getParentCategory(company, id), body),
+  /** `ids` is the full list of the company's parent category ids in their new order. */
+  reorder: async (company, ids) => {
+    if (!Array.isArray(ids) || !ids.length) throw badRequest('Nothing to reorder');
+    await ParentCategory.bulkWrite(ids.map((id, i) => ({ updateOne: { filter: { _id: objectId(id, 'Parent category'), company: company._id }, update: { position: i + 1 } } })));
+    return parentCategoryService.list(company);
+  },
+  /** Deleting a parent category keeps its categories and their products: they only lose the grouping. */
+  remove: async (company, id) => {
+    const parent = await getParentCategory(company, id);
+    await Category.updateMany({ company: company._id, parent: parent._id }, { parent: null });
+    await parent.deleteOne();
+  },
+};
 
 export const categoryService = {
   /** In the company's own order (new ones last); each with its product count. */
@@ -189,10 +238,17 @@ export async function importPanels(company, categoryId, items) {
 /** What the designer consumes: panels, poles, categories with products, and pricing settings.
  * Packages are served separately from GET /api/packages. */
 export async function designerCatalog(company) {
-  const [categories, products] = await Promise.all([
+  const [categories, products, parents] = await Promise.all([
     Category.find({ company: company._id }).sort({ position: 1, createdAt: 1 }),
     Product.find({ company: company._id }).sort({ name: 1 }),
+    ParentCategory.find({ company: company._id }).sort({ position: 1, createdAt: 1, _id: 1 }),
   ]);
+
+  // the parent category of every category, for the grouped bill of materials
+  const parentById = new Map(parents.map((p, i) => [p.id, { parentId: p.id, parentName: p.name, parentOrder: i + 1 }]));
+  const NO_PARENT = { parentId: '', parentName: '', parentOrder: 0 };
+  const groupByCategory = new Map(categories.map((c) => [c.id, { categoryName: c.name, ...(parentById.get(String(c.parent || '')) || NO_PARENT) }]));
+  const groupOf = (product) => groupByCategory.get(String(product.category)) || { categoryName: '', ...NO_PARENT };
 
   const { currency, tariff, otherCostPerKw } = company;
 
@@ -209,6 +265,8 @@ export async function designerCatalog(company) {
       price: Number(p.price) || 0,
       unit: capFirst(p.unit) || 'Nos',
       description: p.description || '',
+      hsnCode: p.hsnCode || '',
+      gstPercent: p.gstPercent != null ? Number(p.gstPercent) : undefined,
     });
   }
 
@@ -219,6 +277,7 @@ export async function designerCatalog(company) {
       id: cat.id,
       name: cat.name,
       description: cat.description || '',
+      ...pick(groupByCategory.get(cat.id), ['parentId', 'parentName', 'parentOrder']),
       products: productsByCat.get(cat.id) || [],
     }))
     .filter((cat) => cat.products.length > 0);
@@ -229,10 +288,11 @@ export async function designerCatalog(company) {
     otherCostPerKw,
     panels: products
       .filter((p) => p.type === 'panels' && p.watts > 0 && p.length > 0 && p.width > 0)
-      .map((p) => ({ id: p.id, brand: p.brand || p.name, model: p.brand ? p.model : '', ...pick(p, ['watts', 'length', 'width', 'price', 'manufactureYear', 'warrantyYears']) })),
+      .map((p) => ({ id: p.id, brand: p.brand || p.name, model: p.brand ? p.model : '', ...pick(p, ['watts', 'length', 'width', 'price', 'manufactureYear', 'warrantyYears', 'hsnCode', 'gstPercent']), ...groupOf(p) })),
     pillars: products
       .filter((p) => p.type === 'poles')
-      .map((p) => ({ id: p.id, name: p.name, shape: p.shape, pricePerFt: p.price })),
+      .map((p) => ({ id: p.id, name: p.name, shape: p.shape, pricePerFt: p.price, ...pick(p, ['hsnCode', 'gstPercent']), ...groupOf(p) })),
+    parentCategories: parents.map((p, i) => ({ id: p.id, name: p.name, order: i + 1 })),
     materialCategories,
   };
 }
@@ -512,6 +572,7 @@ export async function createStarterCatalog(companyId, { panels = DEFAULT_PANELS,
   ];
 
   await Product.insertMany(productsToInsert);
+  await seedParentCategories(companyId); // "Structures" and "Electricals", with the categories above filed under them
 
   // Sample turnkey packages (add catalog products to line items from Dashboard → Packages).
   await Package.insertMany([
