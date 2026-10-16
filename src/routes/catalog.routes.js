@@ -5,13 +5,13 @@ import { validate } from '../middlewares/validate.middleware.js';
 import * as S from '../validation/schemas.js';
 import * as catalog from '../controllers/catalog.controller.js';
 
-// /categories and /products are mounted with withAreaAccess('designs', 'catalog') so the designer (and the
-// quick no-3D proposal editor) can read them with just 'designs:view'; managing the catalog itself needs
-// the matching 'catalog' CRUD action.
-const view = permissionOnlyAny(['designs', 'catalog'], 'view');
-const create = permissionOnly('catalog', 'create');
-const update = permissionOnly('catalog', 'update');
-const del = permissionOnly('catalog', 'delete');
+// /categories and /products are mounted with withAreaAccess('proposals', 'inventory') so the designer (and the
+// quick no-3D proposal editor) can read them with just 'proposals:view'; managing the catalog itself needs
+// the matching 'inventory' action.
+const view = permissionOnlyAny(['proposals', 'inventory'], 'view');
+const create = permissionOnly('inventory', 'create');
+const update = permissionOnly('inventory', 'update');
+const del = permissionOnly('inventory', 'delete');
 
 const crud = (h, createSchema, updateSchema) => {
   const router = Router();

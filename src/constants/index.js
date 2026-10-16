@@ -25,33 +25,17 @@ export const DEFAULT_PRODUCT_UNITS = ['Piece', 'Nos', 'Set', 'Metre', 'Foot', 'K
 /** Default job titles for field staff; each company can edit this list under Agent roles. */
 export const DEFAULT_AGENT_ROLES = ['Site surveyor', 'Electrician', 'Installer', 'Supervisor', 'Inspector'];
 
-/**
- * Company-level areas a staff (agent) account can be given access to, beyond their own assigned
- * installation steps. Unrelated to `agentRoles`/`roles` above (the job-title list used to match a
- * step's required role) — a staff member's job title says what work they do; permissions say which
- * parts of the company workspace they may open, and at what CRUD level (below).
- */
-export const STAFF_PERMISSION_AREAS = ['designs', 'clients', 'billing', 'installations', 'support', 'catalog'];
-export const STAFF_PERMISSION_AREA_LABEL = {
-  designs: 'Proposals — rooftop designs and proposals for clients',
-  clients: 'Clients — client records',
-  billing: 'Billing — payments and invoices',
-  installations: 'Installations — every installation, not just their own steps',
-  catalog: 'Catalog — products, categories, packages, installation charges, units and pricing',
-  support: 'Support — tickets with the platform',
-};
-
-/** CRUD level within a granted area. 'view' is required for any of the other three to have effect. */
-export const STAFF_PERMISSION_ACTIONS = ['view', 'create', 'update', 'delete'];
-export const STAFF_PERMISSION_ACTION_LABEL = { view: 'View', create: 'Create', update: 'Edit', delete: 'Delete' };
-
-/** Every valid `<area>:<action>` permission string, e.g. "designs:create" — stored on User.permissions. */
-export const STAFF_PERMISSIONS = STAFF_PERMISSION_AREAS.flatMap((area) => STAFF_PERMISSION_ACTIONS.map((action) => `${area}:${action}`));
+// Staff permissions (`<area>:<action>`), roles and their templates live in permissions.js. Unrelated to
+// `DEFAULT_AGENT_ROLES` above: a job title says which installation steps someone can be assigned; permissions
+// say which parts of the company workspace they may use.
+export { PERMISSION_AREAS, PERMISSION_CATALOG, STAFF_PERMISSIONS } from './permissions.js';
 
 export const TICKET_STATUS = ['open', 'in_progress', 'resolved', 'closed'];
 export const TICKET_STATUS_LABEL = { open: 'Open', in_progress: 'In progress', resolved: 'Resolved', closed: 'Closed' };
 export const TICKET_CATEGORIES = ['technical', 'billing', 'account', 'other'];
 export const TICKET_PRIORITIES = ['low', 'normal', 'high'];
+/** What a client's help request (company ↔ client support) is about. */
+export const CLIENT_TICKET_CATEGORIES = ['installation', 'service', 'billing', 'proposal', 'other'];
 export const TICKET_FILE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'application/pdf': 'pdf' };
 
 export const ASSET_KINDS = ['logo', 'signature', 'qr'];

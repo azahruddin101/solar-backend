@@ -1,10 +1,13 @@
 // Receipts and tax invoices for booked proposals (each invoice generation is stored separately).
 import { Client, Counter, Design, Invoice, Payment } from '../models/index.js';
-import { badRequest, notFound } from '../utils/HttpError.js';
+import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { parsePagination, toApiJSON, toApiJSONList } from '../utils/lean.js';
 import { cleanRichText } from '../utils/richText.js';
 import { objectId } from '../utils/validators.js';
 import { createNumberedInvoice, peekInvoiceNo } from './invoiceNumber.service.js';
+import { authorityInvoicePricing, resolveInvoicePricing } from './invoicePricing.service.js';
+import { revokeSharesForPdf } from './fileShare.service.js';
+import { deleteFile } from './storage.service.js';
 
 const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
@@ -45,6 +48,30 @@ async function ledger(company, design) {
     invoices: invoiceRows,
     invoice: invoiceRows[0] || null,
   };
+}
+
+/**
+ * Stores the PDF of an issued invoice or receipt — once. The archived PDF is the document the client was given, so it
+ * is never replaced or deleted afterwards (a second upload is refused and its file removed). The check and the write
+ * are one atomic update, so two uploads at the same moment can't both win.
+ */
+async function archivePdfOnce(Model, what, company, id, pdfName) {
+  let filter;
+  try {
+    filter = { _id: objectId(id, what), company: company._id };
+  } catch (e) {
+    await deleteFile(pdfName).catch(() => {});
+    throw e;
+  }
+  const stored = await Model.findOneAndUpdate(
+    { ...filter, $or: [{ pdfName: '' }, { pdfName: null }, { pdfName: { $exists: false } }] },
+    { $set: { pdfName } },
+    { new: true },
+  );
+  if (stored) return { ok: true, pdfName };
+  await deleteFile(pdfName).catch(() => {});
+  if (!(await Model.exists(filter))) throw notFound(what);
+  throw conflict(`This ${what.toLowerCase()} already has its PDF archived. Issued documents can't be replaced.`);
 }
 
 export const billingService = {
@@ -129,8 +156,17 @@ export const billingService = {
     if (!payment) throw notFound('Receipt');
     const later = await Payment.exists({ design: payment.design, createdAt: { $gt: payment.createdAt } });
     if (later) throw badRequest('Only the latest receipt can be removed');
+    if (payment.pdfName) {
+      await revokeSharesForPdf(payment.pdfName);
+      await deleteFile(payment.pdfName);
+    }
     await payment.deleteOne();
     return { ok: true };
+  },
+
+  async attachReceiptPdf(company, paymentId, pdfName) {
+    if (!pdfName) throw badRequest('Upload a PDF');
+    return archivePdfOnce(Payment, 'Receipt', company, paymentId, pdfName);
   },
 
   async createInvoice(company, user, designId, body = {}) {
@@ -138,13 +174,10 @@ export const billingService = {
     const l = await ledger(company, design);
     if (design.status !== 'won') throw badRequest('The proposal must be Booked');
     if (!(l.total > 0)) throw badRequest('This proposal has no price yet');
-    let pricing = design.summary?.pricing || null;
-    let invTotal = l.total;
-    if (body.pricing && typeof body.pricing === 'object') {
-      invTotal = money(body.pricing.total);
-      if (!(invTotal > 0)) throw badRequest('Invoice total must be greater than zero');
-      pricing = body.pricing;
-    }
+    const pricing = resolveInvoicePricing(body.pricing, design.summary?.pricing);
+    if (!pricing) throw badRequest('This proposal has no price yet');
+    const invTotal = money(pricing.total);
+    if (!(invTotal > 0)) throw badRequest('Invoice total must be greater than zero');
     const created = await createNumberedInvoice(company, {
       company: company._id,
       design: design._id,
@@ -169,10 +202,8 @@ export const billingService = {
    * lines come straight from the form. Nothing else is created — no client record, no proposal.
    */
   async createDirectInvoice(company, user, body = {}) {
-    const pricing = body.pricing && typeof body.pricing === 'object' ? body.pricing : null;
-    const total = money(pricing?.total);
-    if (!pricing || !Array.isArray(pricing.lines) || !pricing.lines.some((l) => String(l?.name || '').trim())) throw badRequest('Add at least one line item');
-    if (!(total > 0)) throw badRequest('Invoice total must be greater than zero');
+    const pricing = authorityInvoicePricing(body.pricing);
+    const total = money(pricing.total);
     const billTo = {
       name: String(body.billTo?.name || '').trim(),
       phone: body.billTo?.phone || '',
@@ -203,10 +234,6 @@ export const billingService = {
 
   async attachInvoicePdf(company, invoiceId, pdfName) {
     if (!pdfName) throw badRequest('Upload a PDF');
-    const invoice = await Invoice.findOne({ _id: objectId(invoiceId, 'Invoice'), company: company._id });
-    if (!invoice) throw notFound('Invoice');
-    invoice.pdfName = pdfName;
-    await invoice.save();
-    return { ok: true, pdfName };
+    return archivePdfOnce(Invoice, 'Invoice', company, invoiceId, pdfName);
   },
 };

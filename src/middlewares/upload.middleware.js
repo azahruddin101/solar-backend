@@ -128,6 +128,13 @@ export const uploadInvoicePdf = withStorage(
   ['application/pdf'],
 );
 
+/** Payment receipt PDF (stored in S3 or local uploads). */
+export const uploadReceiptPdf = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-receipt-${req.params.id}-${rand(8)}.pdf`,
+  ['application/pdf'],
+);
+
 /** Support-ticket attachments: images or PDFs, up to 5 per message. */
 export const MAX_TICKET_FILES = 5;
 export const uploadTicketFiles = withStorage(
@@ -136,5 +143,15 @@ export const uploadTicketFiles = withStorage(
     cb(null, true);
   }).array('files', MAX_TICKET_FILES),
   (req, file) => `ticket-${rand(10)}.${TICKET_FILE_TYPES[file.mimetype]}`,
+  IMAGES_AND_PDF,
+);
+
+/** Attachments on a client's help request (company ↔ client): same rules, their own prefix so access is checked against ClientTicket. */
+export const uploadClientTicketFiles = withStorage(
+  memory({ fileSize: 10 * 1024 * 1024, files: MAX_TICKET_FILES }, (req, file, cb) => {
+    if (!TICKET_FILE_TYPES[file.mimetype]) return cb(badRequest('Attach a PNG, JPG, WebP image or a PDF'));
+    cb(null, true);
+  }).array('files', MAX_TICKET_FILES),
+  (req, file) => `cticket-${rand(10)}.${TICKET_FILE_TYPES[file.mimetype]}`,
   IMAGES_AND_PDF,
 );

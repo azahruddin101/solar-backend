@@ -17,7 +17,7 @@ export async function update(req, res) {
 }
 
 export async function remove(req, res) {
-  await clientService.deleteClient(req.company, req.params.id);
+  await clientService.deleteClient(req.company, req.params.id, req.user);
   res.json({ ok: true });
 }
 

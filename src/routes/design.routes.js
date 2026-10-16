@@ -6,10 +6,12 @@ import * as S from '../validation/schemas.js';
 import * as designs from '../controllers/design.controller.js';
 
 const router = Router();
-const view = permissionOnly('designs', 'view');
-const create = permissionOnly('designs', 'create');
-const update = permissionOnly('designs', 'update');
-const del = permissionOnly('designs', 'delete');
+const view = permissionOnly('proposals', 'view');
+const create = permissionOnly('proposals', 'create');
+const update = permissionOnly('proposals', 'update');
+const share = permissionOnly('proposals', 'share');
+const changeStatus = permissionOnly('proposals', 'change_status');
+const del = permissionOnly('proposals', 'delete');
 
 router.get('/', view, designs.list);
 router.post('/', create, validate(S.designCreateSchema), designs.create);
@@ -19,9 +21,9 @@ router.post('/:id/versions', update, uploadDesignVersionPdf, designs.createVersi
 router.post('/:id/versions/:versionId/restore', update, designs.restoreVersion);
 router.get('/:id', view, designs.get);
 router.put('/:id', update, designs.update);
-router.post('/:id/send-for-review', update, validate(S.designSendForReviewSchema), designs.sendForReview);
-router.post('/:id/share', update, designs.share); // the public link's token (created on first use)
-router.delete('/:id/share', update, designs.unshare); // switch the public link off — not a delete of the design itself
+router.post('/:id/send-for-review', changeStatus, validate(S.designSendForReviewSchema), designs.sendForReview);
+router.post('/:id/share', share, designs.share); // the public link's token (created on first use)
+router.delete('/:id/share', share, designs.unshare); // switch the public link off — not a delete of the design itself
 router.delete('/:id', del, designs.remove);
 router.post('/:id/duplicate', create, designs.duplicate);
 

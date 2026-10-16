@@ -27,3 +27,7 @@ export async function uploadAsset(req, res) {
 export async function deleteAsset(req, res) {
   res.json(await assetService.deleteAsset(req.company, req.params.kind));
 }
+
+export async function updateLeadForm(req, res) {
+  res.json({ fields: await companyService.updateLeadForm(req.company, req.body) });
+}

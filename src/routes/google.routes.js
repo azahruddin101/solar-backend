@@ -10,7 +10,7 @@ solarRoutes.get('/', google.solar);
 
 /** The company owner, a client (their own proposals only, see below), or staff who can view designs. */
 function mapViewerOnly(req, res, next) {
-  if (req.user.role === ROLES.CLIENT || req.user.role === ROLES.COMPANY || hasPermission(req.user, 'designs', 'view')) return next();
+  if (req.user.role === ROLES.CLIENT || req.user.role === ROLES.COMPANY || hasPermission(req.user, 'proposals', 'view')) return next();
   throw forbidden();
 }
 

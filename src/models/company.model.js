@@ -84,6 +84,24 @@ const companySchema = new mongoose.Schema(
     // “per piece”, “per nos”, … — offered when adding catalog products (general categories)
     productUnits: { type: [{ type: String, trim: true, maxlength: 20, set: capFirst }], default: () => [...DEFAULT_PRODUCT_UNITS] },
     agentRoles: { type: [{ type: String, trim: true, maxlength: 40 }], default: () => [...DEFAULT_AGENT_ROLES] },
+    // the company's own fields on its lead form, after the fixed Name / Phone / Address
+    // (checked by leads-integration/utils/leadForm.js; managed under Manage Masters → Lead form)
+    leadForm: {
+      type: [
+        new mongoose.Schema(
+          {
+            key: { type: String, required: true, trim: true, maxlength: 40 },
+            label: { type: String, required: true, trim: true, maxlength: 60 },
+            type: { type: String, required: true, enum: ['text', 'textarea', 'number', 'phone', 'email', 'select', 'multiselect', 'date', 'yesno'] },
+            required: { type: Boolean, default: false },
+            help: text(200),
+            options: { type: [{ type: String, trim: true, maxlength: 60 }], default: () => [] },
+          },
+          { _id: false },
+        ),
+      ],
+      default: () => [],
+    },
     parentCategoriesSeeded: { type: Boolean, default: false }, // the default parent categories were created (see parentCategory.migration.js)
   },
   schemaOptions,

@@ -5,12 +5,12 @@ import * as S from '../validation/schemas.js';
 import { packageController } from '../controllers/package.controller.js';
 
 const router = Router();
-// mounted with withAreaAccess('designs', 'catalog') — reading the package list/detail is part of using
-// the designer; creating, changing or deleting a package needs the matching 'catalog' CRUD action.
-const view = permissionOnlyAny(['designs', 'catalog'], 'view');
-const create = permissionOnly('catalog', 'create');
-const update = permissionOnly('catalog', 'update');
-const del = permissionOnly('catalog', 'delete');
+// mounted with withAreaAccess('proposals', 'inventory') — reading the package list/detail is part of using
+// the designer; creating, changing or deleting a package needs the matching 'inventory' action.
+const view = permissionOnlyAny(['proposals', 'inventory'], 'view');
+const create = permissionOnly('inventory', 'create');
+const update = permissionOnly('inventory', 'update');
+const del = permissionOnly('inventory', 'delete');
 
 router.get('/', view, packageController.list);
 router.post('/', create, validate(S.packageSchema), packageController.create);

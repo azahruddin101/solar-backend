@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import multer from 'multer';
+import { safePath } from './requestLog.middleware.js';
 import { HttpError } from '../utils/HttpError.js';
+import { logger } from '../utils/logger.js';
 
 export const notFoundHandler = (req, res) => res.status(404).json({ error: 'Not found' });
 
@@ -33,6 +35,12 @@ export function errorHandler(err, req, res, next) {
   if (err instanceof mongoose.Error.VersionError) return res.status(409).json({ error: 'This was just changed by someone else. Reload and try again.' });
   if (err instanceof mongoose.Error.CastError) return res.status(400).json({ error: `Invalid value for ${err.path}` });
   if (err.code === 11000) return res.status(409).json({ error: 'That value is already in use' });
-  console.error(err);
+  logger.error('unhandled', {
+    method: req.method,
+    path: safePath(req),
+    rid: req.id,
+    err: err?.message || String(err),
+  });
+  if (err?.stack) console.error(err.stack);
   res.status(500).json({ error: 'Internal server error' });
 }

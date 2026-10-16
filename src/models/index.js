@@ -14,7 +14,9 @@ export { InstallationCharge } from './installationCharge.model.js';
 export { Package } from './package.model.js';
 export { Product } from './product.model.js';
 export { Project } from './project.model.js';
+export { Role } from './role.model.js';
 export { User } from './user.model.js';
 
 export { Notification } from './notification.model.js';
 export { Ticket } from './ticket.model.js';
+export { ClientTicket } from './clientTicket.model.js';

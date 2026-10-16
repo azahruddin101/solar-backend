@@ -1,6 +1,7 @@
 // Installation projects: the company's steps for one accepted design, who does each step, and a log of
 // everything that happened. The company owner manages the whole project; agents work on their own steps.
 import { ROLES, STEP_STATUS } from '../constants/index.js';
+import { hasPermission } from '../middlewares/auth.middleware.js';
 import { Design, Project, User } from '../models/index.js';
 import { resolveAgentRole, stepPriority } from './company.service.js';
 import { notifyStepAssigned, notifyStepStatusChange } from './notification.service.js';
@@ -286,6 +287,7 @@ export async function addStep(company, user, id, body) {
   const project = await getOwn(company, id);
   if (project.steps.length >= MAX_STEPS) throw badRequest(`An installation can have up to ${MAX_STEPS} steps`);
   const role = body?.role !== undefined ? resolveAgentRole(company, body.role) : '';
+  if (body?.assignee) need(user, 'assign', 'Assign steps');
   const agent = await ownAgent(company, body?.assignee, role);
   project.steps.push({ name: cleanName(body?.name), description: body?.description, role, priority: stepPriority(body?.priority), assignee: agent?._id || null });
   const step = project.steps.at(-1);
@@ -294,11 +296,26 @@ export async function addStep(company, user, id, body) {
   return saveAndPresent(project, user);
 }
 
-/** Rename, describe, (re)assign, change status, or move a step up/down. */
+const need = (user, action, label) => {
+  if (!hasPermission(user, 'tasks', action)) throw forbidden(`You need the “Installations › ${label}” permission. Ask your company admin.`);
+};
+
+/**
+ * Rename, describe, (re)assign, change status, or move a step up/down. Each kind of change needs its own permission:
+ * Edit steps (name, description, role, priority, order), Assign steps (assignee), Update step status (status).
+ */
 export async function updateStep(company, user, id, stepId, body) {
   const project = await getOwn(company, id);
   const step = stepOf(project, stepId);
   let change = null;
+  const edits = (body?.name !== undefined && cleanName(body.name) !== step.name)
+    || (body?.description !== undefined && String(body.description ?? '') !== String(step.description ?? ''))
+    || (body?.priority !== undefined && stepPriority(body.priority) !== step.priority)
+    || (body?.role !== undefined && resolveAgentRole(company, body.role) !== (step.role || ''))
+    || body?.move === 'up' || body?.move === 'down';
+  if (edits) need(user, 'update', 'Edit steps');
+  if (body?.assignee !== undefined && String(body.assignee || '') !== String(step.assignee || '')) need(user, 'assign', 'Assign steps');
+  if (body?.status !== undefined) need(user, 'change_status', 'Update step status');
 
   if (body?.name !== undefined && cleanName(body.name) !== step.name) {
     const before = step.name;
@@ -412,3 +429,9 @@ export const deleteProjectsOf = (filter) => Project.deleteMany(filter);
 
 /** Client kept for quick filters; re-point it when a design moves to another client. */
 export const moveDesignProject = (design) => Project.updateOne({ design: design._id }, { client: design.client }, { timestamps: false });
+
+/** Staff that installation steps can be assigned to: just what the assign dropdown shows. */
+export async function listAssignableStaff(company) {
+  const staff = await User.find({ company: company._id, role: ROLES.AGENT }).select('name photo active roles jobTitle').sort({ name: 1 }).lean();
+  return staff.map((u) => ({ id: String(u._id), name: u.name, photo: u.photo || '', active: u.active !== false, roles: u.roles?.length ? u.roles : u.jobTitle ? [u.jobTitle] : [] }));
+}

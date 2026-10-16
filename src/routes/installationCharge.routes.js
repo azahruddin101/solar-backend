@@ -6,12 +6,12 @@ import { installationChargeService as svc } from '../services/installationCharge
 import { wrap } from '../utils/wrap.js';
 
 const router = Router();
-// mounted with withAreaAccess('designs', 'catalog') — the designer's charge picker only needs to read the
-// list; defining/changing the charges themselves needs the matching 'catalog' CRUD action.
-const view = permissionOnlyAny(['designs', 'catalog'], 'view');
-const create = permissionOnly('catalog', 'create');
-const update = permissionOnly('catalog', 'update');
-const del = permissionOnly('catalog', 'delete');
+// mounted with withAreaAccess('proposals', 'inventory') — the designer's charge picker only needs to read the
+// list; defining/changing the charges themselves needs the matching 'inventory' action.
+const view = permissionOnlyAny(['proposals', 'inventory'], 'view');
+const create = permissionOnly('inventory', 'create');
+const update = permissionOnly('inventory', 'update');
+const del = permissionOnly('inventory', 'delete');
 
 router.get('/', view, wrap((req) => svc.list(req.company)));
 router.post('/', create, validate(S.installationChargeSchema), wrap((req) => svc.create(req.company, req.body), 201));

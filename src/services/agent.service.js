@@ -1,17 +1,20 @@
 // Agents: a company's field staff. They sign in and work on the installation steps assigned to them.
 import path from 'node:path';
-import { ROLES, STAFF_PERMISSIONS } from '../constants/index.js';
-import { Company, Project, User } from '../models/index.js';
+import { ROLES } from '../constants/index.js';
+import { isPermission, normalizePermissions } from '../constants/permissions.js';
+import { Company, Project, Role, User } from '../models/index.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { hashPassword } from '../utils/password.js';
 import { pick } from '../utils/pick.js';
 import { email as validEmail, objectId, password as validPassword } from '../utils/validators.js';
 import { agentRolesList } from './company.service.js';
+import { effectiveFrom, rolesById } from './permission.service.js';
 import { revokeUserSessions } from './session.service.js';
 import { deleteFile } from './storage.service.js';
 
 const FIELDS = ['name', 'phone'];
 const MAX_ROLES_PER_AGENT = 10;
+const MAX_STAFF_ROLES_PER_AGENT = 10;
 
 async function removePhotoFile(photoUrl) {
   const name = path.basename(String(photoUrl || ''));
@@ -21,10 +24,15 @@ async function removePhotoFile(photoUrl) {
 const NO_STATS = { pending: 0, inProgress: 0, open: 0, done7: 0, done30: 0, done90: 0, doneTotal: 0 };
 const DAY = 24 * 60 * 60 * 1000;
 
-function agentPayload(doc, stats = NO_STATS) {
+/**
+ * One staff member for the owner's team screens. `permissions` are the extra grants on this account; `staffRoles`
+ * the roles it has ({ id, name }); `effectivePermissions` what it can actually do (roles + extra grants).
+ */
+function agentPayload(doc, stats = NO_STATS, roleMap = new Map()) {
   const j = doc.toJSON ? doc.toJSON() : { ...doc };
   const roles = Array.isArray(j.roles) && j.roles.length ? j.roles : j.jobTitle ? [j.jobTitle] : [];
-  return { ...j, roles, openSteps: stats.open, stats };
+  const staffRoles = (doc.staffRoles || []).map((id) => roleMap.get(String(id))).filter(Boolean).map((r) => ({ id: String(r._id), name: r.name }));
+  return { ...j, roles, staffRoles, effectivePermissions: effectiveFrom(doc, roleMap), openSteps: stats.open, stats };
 }
 
 /**
@@ -74,21 +82,25 @@ function parseAgentRoles(company, raw) {
   return out;
 }
 
-/**
- * Which `<area>:<action>` permissions (beyond their own assigned steps) this staff member may use.
- * Anything not in that exact shape is dropped rather than rejected — a client that still has an older
- * area-only permission cached (e.g. "designs", from before CRUD-level permissions) shouldn't fail the
- * whole save; it's just silently normalised away.
- */
+/** Extra permissions granted on this account: each must exist (see constants/permissions.js); any action brings its area's View. */
 function parsePermissions(raw) {
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw)) throw badRequest('Permissions must be a list');
-  const out = [];
-  for (const item of raw) {
-    const p = String(item ?? '').trim();
-    if (p && STAFF_PERMISSIONS.includes(p) && !out.includes(p)) out.push(p);
-  }
-  return out;
+  const unknown = raw.map((p) => String(p ?? '').trim()).filter((p) => p && !isPermission(p));
+  if (unknown.length) throw badRequest(`Unknown permission: ${unknown.slice(0, 3).join(', ')}`);
+  return normalizePermissions(raw);
+}
+
+/** The roles given to a staff member: each must be one of this company's roles. */
+async function parseStaffRoles(company, raw) {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) throw badRequest('Roles must be a list');
+  const ids = [...new Set(raw.map((id) => String(id ?? '').trim()).filter(Boolean))];
+  if (ids.length > MAX_STAFF_ROLES_PER_AGENT) throw badRequest(`A staff member can have up to ${MAX_STAFF_ROLES_PER_AGENT} roles`);
+  ids.forEach((id) => objectId(id, 'Role'));
+  const found = await Role.countDocuments({ _id: { $in: ids }, company: company._id });
+  if (found !== ids.length) throw badRequest('Choose roles from your company’s list');
+  return ids;
 }
 
 export async function getAgent(company, id) {
@@ -99,11 +111,12 @@ export async function getAgent(company, id) {
 
 /** Agents with their current workload and recent completions. */
 export async function listAgents(company) {
-  const [agents, stats] = await Promise.all([
+  const [agents, stats, roleMap] = await Promise.all([
     User.find({ company: company._id, role: ROLES.AGENT }).sort({ createdAt: -1 }),
     agentStats(company._id),
+    rolesById(company._id),
   ]);
-  return agents.map((a) => agentPayload(a, stats.get(a.id) || NO_STATS));
+  return agents.map((a) => agentPayload(a, stats.get(a.id) || NO_STATS, roleMap));
 }
 
 export async function createAgent(company, body) {
@@ -113,9 +126,11 @@ export async function createAgent(company, body) {
   if (await User.exists({ email })) throw conflict('That email is already in use');
   const roles = parseAgentRoles(company, body?.roles ?? []) ?? [];
   const permissions = parsePermissions(body?.permissions ?? []) ?? [];
+  const staffRoles = (await parseStaffRoles(company, body?.staffRoles ?? [])) ?? [];
   const agent = await User.create({
     ...pick(body, FIELDS),
     roles,
+    staffRoles,
     permissions,
     jobTitle: '',
     email,
@@ -123,7 +138,7 @@ export async function createAgent(company, body) {
     role: ROLES.AGENT,
     company: company._id,
   });
-  return agentPayload(agent);
+  return agentPayload(agent, NO_STATS, await rolesById(company._id));
 }
 
 /** Profile, active flag, sign-in email and (optionally) a new password. */
@@ -137,6 +152,7 @@ export async function updateAgent(company, id, body) {
     agent.jobTitle = '';
   }
   if (body?.permissions !== undefined) agent.permissions = parsePermissions(body.permissions) ?? [];
+  if (body?.staffRoles !== undefined) agent.staffRoles = (await parseStaffRoles(company, body.staffRoles)) ?? [];
   if (body?.email !== undefined) {
     const email = validEmail(body.email);
     if (email !== agent.email && (await User.exists({ email }))) throw conflict('That email is already in use');
@@ -149,7 +165,7 @@ export async function updateAgent(company, id, body) {
   }
   await agent.save();
   if (passwordChanged || agent.active === false) await revokeUserSessions(agent._id);
-  return agentPayload(agent, (await agentStats(company._id, agent._id)).get(agent.id) || NO_STATS);
+  return agentPayload(agent, (await agentStats(company._id, agent._id)).get(agent.id) || NO_STATS, await rolesById(company._id));
 }
 
 /** Their steps become unassigned; the activity logs keep their name. */

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { ROLES, STAFF_PERMISSIONS } from '../constants/index.js';
+import { PERMISSIONS_VERSION } from '../constants/permissions.js';
 import { schemaOptions, text } from './schemaOptions.js';
 
 const userSchema = new mongoose.Schema(
@@ -14,8 +15,11 @@ const userSchema = new mongoose.Schema(
     phone: text(40),
     jobTitle: text(80), // legacy single role; prefer `roles`
     roles: { type: [{ type: String, trim: true, maxlength: 40 }], default: () => [] },
-    // company workspace areas this staff member may open beyond their own assigned steps (role 'agent' only)
+    // what this staff member may do in the company workspace beyond their own assigned steps (role 'agent' only):
+    // the permissions of their roles plus these extra grants on their own account (see constants/permissions.js)
+    staffRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Role' }], default: () => [] },
     permissions: { type: [{ type: String, enum: STAFF_PERMISSIONS }], default: () => [] },
+    permissionsVersion: { type: Number, default: PERMISSIONS_VERSION }, // names of `permissions`; older accounts are migrated once
     photo: text(300), // /uploads/… portrait (optional)
     active: { type: Boolean, default: true }, // an inactive agent cannot sign in
     lastLoginAt: Date,

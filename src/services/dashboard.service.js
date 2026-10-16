@@ -3,6 +3,7 @@ import { DEFAULT_PRODUCT_UNITS, ROLES } from '../constants/index.js';
 import { Category, Client, Design, InstallationCharge, Invoice, Package, Payment, Product, Project, User } from '../models/index.js';
 import { billingService, totalOf } from './billing.service.js';
 import { agentRolesList } from './company.service.js';
+import { leadModels } from '../integrations/leads.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const round = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -119,7 +120,7 @@ export async function dashboard(company) {
 /** The numbers shown beside the sidebar links: how many of each thing the company has. `billing` is the count that needs action. */
 export async function counts(company) {
   const filter = { company: company._id };
-  const [clients, designs, packages, installations, team, installationCharges, products, categories, overview] = await Promise.all([
+  const [clients, designs, packages, installations, team, installationCharges, products, categories, overview, metaLeads, googleLeads, manualLeads] = await Promise.all([
     Client.countDocuments(filter),
     Design.countDocuments(filter),
     Package.countDocuments(filter),
@@ -129,6 +130,10 @@ export async function counts(company) {
     Product.countDocuments(filter),
     Category.countDocuments(filter),
     billingService.overview(company),
+    // the same leads each lead table lists
+    leadModels.meta.countDocuments({ ...filter, isDeleted: false, processingStatus: 'processed' }),
+    leadModels.google.countDocuments({ ...filter, isDeleted: false }),
+    leadModels.manual.countDocuments({ ...filter, isDeleted: false }),
   ]);
   return {
     clients,
@@ -143,5 +148,9 @@ export async function counts(company) {
     products,
     categories,
     productUnits: company.productUnits?.length || DEFAULT_PRODUCT_UNITS.length,
+    leads: metaLeads + googleLeads + manualLeads,
+    metaLeads,
+    googleLeads,
+    manualLeads,
   };
 }

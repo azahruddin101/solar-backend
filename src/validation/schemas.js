@@ -1,6 +1,6 @@
 // Request schemas, one per form/endpoint. Objects are "loose": fields not listed here pass through untouched
 // (the services still pick what they accept), while every listed field is checked and normalised.
-import { CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, PAYMENT_MODES, PILLAR_SHAPES, PRODUCT_TYPES, STAFF_PERMISSIONS, STEP_PRIORITIES, STEP_STATUS, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS } from '../constants/index.js';
+import { CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, PAYMENT_MODES, PILLAR_SHAPES, PRODUCT_TYPES, STAFF_PERMISSIONS, STEP_PRIORITIES, STEP_STATUS, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS, CLIENT_TICKET_CATEGORIES } from '../constants/index.js';
 import * as f from './common.js';
 
 const { z } = f;
@@ -100,8 +100,15 @@ export const planUpdateSchema = planSchema.partial();
 
 /* ───────────── agents ───────────── */
 
-export const agentCreateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.newPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), permissions: strArray(STAFF_PERMISSIONS.length, 30).optional() });
-export const agentUpdateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.optionalNewPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), permissions: strArray(STAFF_PERMISSIONS.length, 30).optional() }).partial();
+const permissionList = z.array(z.enum(STAFF_PERMISSIONS, { error: 'Unknown permission' })).max(STAFF_PERMISSIONS.length);
+// `roles` are job titles (which installation steps someone can be assigned); `staffRoles` are permission roles (ids)
+export const agentCreateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.newPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), staffRoles: strArray(10, 24).optional(), permissions: permissionList.optional() });
+export const agentUpdateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.optionalNewPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), staffRoles: strArray(10, 24).optional(), permissions: permissionList.optional() }).partial();
+
+/* ───────────── staff roles ───────────── */
+
+export const roleCreateSchema = obj({ name: f.textRequired(60, 'Role name'), description: f.textOptional(200, 'Description'), permissions: permissionList });
+export const roleUpdateSchema = roleCreateSchema.partial();
 
 /* ───────────── catalog ───────────── */
 
@@ -192,6 +199,15 @@ export const ticketCreateSchema = obj({
 export const ticketMessageSchema = obj({ body: f.textOptional(4000, 'Message') });
 export const ticketStatusSchema = obj({ status: z.enum(TICKET_STATUS, 'Invalid ticket status') });
 
+/* client support: company ↔ client (fields arrive as multipart text) */
+export const clientTicketCreateSchema = obj({
+  subject: f.textRequired(150, 'Subject').refine((v) => v.length >= 3, 'Subject must be at least 3 characters'),
+  body: f.textOptional(4000, 'Message'),
+  category: z.enum(CLIENT_TICKET_CATEGORIES).optional(),
+  priority: z.enum(TICKET_PRIORITIES).optional(),
+  clientId: f.objectIdString.optional(), // the company starting a conversation with one of its clients
+});
+
 /* ───────────── designs ───────────── */
 
 export const designCreateSchema = obj({ client: f.objectIdString, name: f.textOptional(120, 'Design name') });
@@ -248,8 +264,30 @@ export const paymentSchema = obj({
   receivedOn: z.string().optional(),
 });
 
+const invoiceLineSchema = obj({
+  name: f.textRequired(160, 'Line item name'),
+  detail: f.textOptional(300, 'Detail'),
+  hsn: f.hsnOptional,
+  qty: f.numOptional({ min: 0, max: 1e6, label: 'Quantity' }),
+  unit: f.textOptional(20, 'Unit'),
+  rate: f.num({ min: 0, max: 1e10, label: 'Rate' }),
+  gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
+});
+
+/** Line items and discount flags; totals are recomputed on the server (BIZ-001). */
+export const invoicePricingInputSchema = obj({
+  lines: z.array(invoiceLineSchema).min(1, 'Add at least one line item').max(100),
+  discount: f.numOptional({ min: 0, max: 1e10, label: 'Discount' }),
+  discountIsPercent: z.boolean().optional(),
+  discountRemark: f.textOptional(200, 'Discount remark'),
+  gstIncluded: z.boolean().optional(),
+  withGst: z.boolean().optional(),
+  invoiceGstMode: z.enum(['with_gst', 'without_gst']).optional(),
+  paymentTerms: f.textOptional(120, 'Payment terms'),
+});
+
 export const invoiceCreateSchema = obj({
-  pricing: z.any().optional(),
+  pricing: invoicePricingInputSchema.optional(),
   termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
 });
 
@@ -264,6 +302,6 @@ export const directInvoiceSchema = obj({
     gstNumber: f.gstinOptional,
   }),
   title: f.textOptional(160, 'Title'),
-  pricing: z.any(),
+  pricing: invoicePricingInputSchema,
   termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
 });

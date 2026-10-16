@@ -16,6 +16,7 @@ const paymentSchema = new mongoose.Schema(
     note: text(300),
     contractTotal: { type: Number, default: 0 }, // the proposal total when this was received
     balanceAfter: { type: Number, default: 0 }, // what was still to pay after this payment
+    pdfName: text(200), // receipt PDF in uploads / S3, served at /uploads/<pdfName>
     createdByName: text(120),
   },
   schemaOptions,

@@ -16,6 +16,9 @@ import { deleteCompanyAssets } from './asset.service.js';
 import { ownerCompanyView } from '../utils/companyView.js';
 import { newSessionId, registerSession, revokeUserSessions } from './session.service.js';
 import { deleteTicketsForCompany } from './ticket.service.js';
+import { deleteClientTicketsForCompany } from './clientTicket.service.js';
+import { leadForm } from '../integrations/leads.js';
+
 
 const PROFILE = ['name', 'email', 'phone', 'address', 'website', 'taxId', 'pan'];
 const ADMIN_CONTROLS = ['status', 'notes'];
@@ -215,6 +218,7 @@ export async function deleteCompany(id) {
     User.deleteMany(filter),
   ]);
   await deleteTicketsForCompany(company._id);
+  await deleteClientTicketsForCompany(company._id);
   await company.deleteOne();
   await deleteCompanyAssets(company.id);
 }
@@ -233,12 +237,24 @@ export async function updateOwnCompany(company, body) {
 
 const CATALOG_SELF_EDITABLE = ['currency', 'tariff', 'otherCostPerKw'];
 
-/** The narrow slice of company settings a staff member with the "catalog" permission may change: product units and default pricing — never branding, contact info, or anything else `updateOwnCompany` covers. */
+/** Product units and default pricing (currency, tariff, balance-of-system cost): company masters, owner only (see company.routes.js). */
 export async function updateCatalogSettings(company, body) {
   Object.assign(company, pick(body, CATALOG_SELF_EDITABLE));
   if (body?.productUnits !== undefined) company.productUnits = cleanProductUnits(body.productUnits);
   await company.save();
   return company;
+}
+
+/** The company's own lead-form fields (a master). Fields keep their storage key, so existing answers stay linked. */
+export async function updateLeadForm(company, body) {
+  try {
+    company.leadForm = leadForm.parseLeadForm(body?.fields, company.leadForm || []);
+  } catch (e) {
+    if (e instanceof leadForm.LeadFormError) throw badRequest(e.message);
+    throw e;
+  }
+  await company.save();
+  return leadForm.formOf(company);
 }
 
 /** A step's priority: 'medium' when none is given. */

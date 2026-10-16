@@ -3,6 +3,7 @@
 import { ROLES, STEP_STATUS_LABEL } from '../constants/index.js';
 import { env } from '../config/env.js';
 import { Design, Notification, User } from '../models/index.js';
+import { effectiveFrom, rolesById } from './permission.service.js';
 import { isOneSignalConfigured, sendPush } from './onesignal.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
 
@@ -132,6 +133,37 @@ async function sendTicketUpdate({ ticketId, companyId, ref, subject, title, body
   const message = { title, body: `${ref} · ${subject}: ${body}`.slice(0, 300), data: { event: 'ticket_update', ticketId } };
   await record(audiences, { ...message, company: companyId, type: 'ticket_update', eventKey: `ticket:${eventId}` });
   await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...message, idempotencyKey: `ticket:${eventId}` });
+}
+
+/**
+ * Client support (company ↔ client). `toTeam`: the client wrote — tell the owner(s) and staff who may view Client
+ * support; otherwise the company wrote — tell that client's portal login(s). Never the person who acted.
+ */
+export function notifyClientTicket(update) {
+  sendClientTicket(update).catch((e) => console.error(`[push] client support notification failed: ${e.message}`));
+}
+
+async function sendClientTicket({ ticketId, companyId, clientId, ref, subject, title, body, eventId, toTeam, actorId }) {
+  const notActor = (id) => String(id) !== actorId;
+  let audiences;
+  if (toTeam) {
+    const [owners, staff, roles] = await Promise.all([
+      User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean(),
+      User.find({ company: companyId, role: ROLES.AGENT, active: true }).select('_id permissions staffRoles').lean(),
+      rolesById(companyId),
+    ]);
+    const allowedStaff = staff.filter((u) => effectiveFrom(u, roles).includes('helpdesk:view'));
+    audiences = [
+      { userIds: owners.map((u) => String(u._id)).filter(notActor), path: `/dashboard/client-support/${ticketId}` },
+      { userIds: allowedStaff.map((u) => String(u._id)).filter(notActor), path: `/agent/client-support/${ticketId}` },
+    ];
+  } else {
+    const clients = await User.find({ company: companyId, role: ROLES.CLIENT, client: clientId, active: true }).select('_id').lean();
+    audiences = [{ userIds: clients.map((u) => String(u._id)).filter(notActor), path: `/portal/support/${ticketId}` }];
+  }
+  const message = { title, body: `${ref} · ${subject}: ${body}`.slice(0, 300), data: { event: 'client_ticket_update', ticketId } };
+  await record(audiences, { ...message, company: companyId, type: 'client_ticket_update', eventKey: `client-ticket:${eventId}` });
+  await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...message, idempotencyKey: `client-ticket:${eventId}` });
 }
 
 const PROPOSAL_RESPONSE_LABEL = {

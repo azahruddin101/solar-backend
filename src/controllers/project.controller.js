@@ -79,3 +79,7 @@ export async function uploadMyStepPhoto(req, res) {
 export async function addMyNote(req, res) {
   res.status(201).json(await projectService.addNoteAsAgent(req.user, req.params.id, req.body));
 }
+
+export async function assignees(req, res) {
+  res.json(await projectService.listAssignableStaff(req.company));
+}

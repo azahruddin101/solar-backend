@@ -8,6 +8,7 @@ import { signToken } from '../utils/token.js';
 import { password as validPassword } from '../utils/validators.js';
 import { assertConcurrentLoginAllowed, confirmWithinDeviceLimit, newSessionId, registerSession, revokeAllCompanySessions, revokeSession, revokeUserSessions } from './session.service.js';
 import { ownerCompanyView } from '../utils/companyView.js';
+import { resolvePermissions } from './permission.service.js';
 
 // Tiny in-memory throttle for sign-in: 8 failures per 15 min per ip+email.
 const attempts = new Map();
@@ -38,12 +39,23 @@ function recordFailure(key) {
   if (attempts.size > MAX_TRACKED) attempts.delete(attempts.keys().next().value); // oldest first
 }
 
+/**
+ * The signed-in user as the app sees it. For staff, `permissions` is what they can actually do — their roles' permissions
+ * plus their own extra grants — so the UI can show exactly the actions the API will allow.
+ */
+export async function userView(user) {
+  if (!user) return null;
+  const json = user.toJSON ? user.toJSON() : { ...user };
+  if (user.role !== ROLES.AGENT) return json;
+  return { ...json, permissions: user.effectivePermissions ?? (await resolvePermissions(user)) };
+}
+
 /** What a signed-in user may see of their company: agents only get its name, contact and branding. */
 export async function companyView(user, company) {
   if (!company) return null;
   const payload = await ownerCompanyView(company);
   // currency/tariff/otherCostPerKw/productUnits/features are plain operational settings (not sensitive
-  // business info like address or tax id), and several staff permissions (designs, billing, catalog) need
+  // business info like address or tax id), and several staff permissions (proposals, finances, inventory) need
   // them to work correctly — a staff session without them would show blank prices or the wrong currency.
   if (user.role === ROLES.AGENT) return pick(payload, ['id', 'name', 'email', 'phone', 'logo', 'theme', 'currency', 'tariff', 'otherCostPerKw', 'productUnits', 'features']);
   if (user.role === ROLES.CLIENT) return pick(payload, ['id', 'name', 'email', 'phone', 'address', 'website', 'taxId', 'logo', 'signature', 'qr', 'qrLabel', 'tagline', 'signatoryName', 'signatoryTitle', 'theme', 'currency', 'pdfTerms', 'features']);
@@ -88,7 +100,7 @@ export async function login({ email, password, ip, userAgent, replaceSessions = 
   }
   user.lastLoginAt = new Date();
   await user.save();
-  return { token, user, company: await companyView(user, company), impersonated: false };
+  return { token, user: await userView(user), company: await companyView(user, company), impersonated: false };
 }
 
 export async function logout(sessionId) {

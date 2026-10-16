@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
+import { deleteClientTicketsForClient } from './clientTicket.service.js';
 import { ROLES } from '../constants/index.js';
-import { Client, Design, User } from '../models/index.js';
+import { Client, Design, Invoice, Payment, Project, User } from '../models/index.js';
+import { hasPermission } from '../middlewares/auth.middleware.js';
+import { deleteDesign } from './design.service.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
 import { hashPassword } from '../utils/password.js';
 import { pick } from '../utils/pick.js';
@@ -168,11 +171,29 @@ export async function updateClient(company, id, body) {
   return { ...client.toJSON(), hasLogin: Boolean(login) };
 }
 
-/** Deleting a client also deletes the designs (and installations) made for them. */
-export async function deleteClient(company, id) {
+/**
+ * Deleting a client also deletes the proposals (and installations) made for them — but never money records: a
+ * client with any receipt or invoice can't be deleted. Because the delete reaches into proposals and installations,
+ * a staff member also needs the delete permission of those areas when the client has any.
+ */
+export async function deleteClient(company, id, user) {
   const client = await getClient(company, id);
-  await deleteProjectsOf({ company: company._id, client: client._id });
-  await Design.deleteMany({ company: company._id, client: client._id });
+  const scope = { company: company._id, client: client._id };
+  const designs = await Design.find(scope).select('_id').lean();
+  const designIds = designs.map((d) => d._id);
+  const billed = (await Payment.exists({ company: company._id, $or: [{ client: client._id }, { design: { $in: designIds } }] }))
+    || (await Invoice.exists({ company: company._id, $or: [{ client: client._id }, { design: { $in: designIds } }] }));
+  if (billed) throw badRequest('This client has receipts or invoices, so it cannot be deleted.');
+  if (designIds.length && !hasPermission(user, 'proposals', 'delete')) {
+    throw forbidden('This client has proposals. Deleting the client deletes them too, which needs the Proposals “Delete” permission.');
+  }
+  if (!hasPermission(user, 'tasks', 'delete') && (await Project.exists({ company: company._id, $or: [{ client: client._id }, { design: { $in: designIds } }] }))) {
+    throw forbidden('This client has installations. Deleting the client deletes them too, which needs the Installations “Delete” permission.');
+  }
+  // one by one, so each proposal's stored PDF versions and installation go with it (and its own money check runs)
+  for (const designId of designIds) await deleteDesign(company, designId);
+  await deleteProjectsOf(scope);
+  await deleteClientTicketsForClient(company._id, client._id);
   await removeClientLogin(company, client.id);
   await client.deleteOne();
 }

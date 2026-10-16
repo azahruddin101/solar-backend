@@ -1,7 +1,7 @@
 import * as authService from '../services/auth.service.js';
 import { forbidden } from '../utils/HttpError.js';
 
-const session = async (req) => ({ user: req.user, company: await authService.companyView(req.user, req.company || null), impersonated: Boolean(req.impersonatedBy) });
+const session = async (req) => ({ user: await authService.userView(req.user), company: await authService.companyView(req.user, req.company || null), impersonated: Boolean(req.impersonatedBy) });
 
 export async function login(req, res) {
   res.json(await authService.login({

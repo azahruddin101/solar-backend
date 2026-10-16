@@ -5,6 +5,8 @@ import { Client, Design, DesignVersion, Invoice, Payment } from '../models/index
 import { badRequest, forbidden, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
+import { hasPermission } from '../middlewares/auth.middleware.js';
+import { totalOf } from './billing.service.js';
 import { deleteProjectsOf, moveDesignProject } from './project.service.js';
 import { deleteFile } from './storage.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
@@ -185,8 +187,34 @@ export async function createDesign(company, user, body) {
 }
 
 
+/** Whether money has been taken or billed on this proposal (receipts or an invoice). */
+const isBilled = async (company, design) => Boolean((await Payment.exists({ company: company._id, design: design._id })) || (await Invoice.exists({ company: company._id, design: design._id })));
+
+/**
+ * A proposal with receipts or an invoice is a booked deal: its total, client and status are what the money was taken
+ * against, so nobody — the owner included — can change them any more (editing the design without changing its total
+ * still works, so the designer's autosave keeps working). To quote something different, duplicate the proposal.
+ */
+async function assertBookedDealUnchanged(company, design, { status, client, summary }) {
+  const changesStatus = status !== undefined && status !== design.status;
+  const changesClient = client !== undefined && String(client) !== String(design.client?._id ?? design.client);
+  const changesTotal = summary && totalOf({ summary: { ...(design.toObject().summary || {}), ...pick(summary, SUMMARY) } }) !== totalOf(design);
+  if (!changesStatus && !changesClient && !changesTotal) return;
+  if (!(await isBilled(company, design))) return;
+  const what = changesTotal ? 'price' : changesClient ? 'client' : 'status';
+  throw badRequest(`This proposal has receipts or an invoice, so its ${what} can’t be changed. Duplicate it to quote something different.`);
+}
+
+/** Changing a proposal's status or client needs those permissions on top of Edit (the owner has them all). */
+function assertMayChange(user, { status, client }, design) {
+  if (status !== undefined && status !== design.status && !hasPermission(user, 'proposals', 'change_status')) throw forbidden('You need the “Proposals › Change status” permission. Ask your company admin.');
+  if (client !== undefined && String(client) !== String(design.client?._id ?? design.client) && !hasPermission(user, 'proposals', 'change_client')) throw forbidden('You need the “Proposals › Change client” permission. Ask your company admin.');
+}
+
 export async function updateDesign(company, user, id, body) {
   const design = await getDesign(company, id);
+  assertMayChange(user, body || {}, design);
+  await assertBookedDealUnchanged(company, design, body || {});
   const prevStatus = design.status;
   const prevName = design.name;
   Object.assign(design, pick(body, ['name', 'status']));
@@ -265,7 +293,7 @@ export async function duplicateDesign(company, user, id) {
 /** Deleting a design also deletes its installation and stored PDF versions. */
 export async function deleteDesign(company, id) {
   const design = await getDesign(company, id);
-  if ((await Payment.exists({ design: design._id })) || (await Invoice.exists({ design: design._id }))) throw badRequest('This proposal has receipts or an invoice, so it cannot be deleted');
+  if (await isBilled(company, design)) throw badRequest('This proposal has receipts or an invoice, so it cannot be deleted');
   await deleteProjectsOf({ design: design._id });
   const versions = await DesignVersion.find({ design: design._id }).select('pdfName');
   await Promise.all(versions.map((v) => deleteFile(v.pdfName)));
@@ -306,6 +334,7 @@ export async function getDesignVersion(company, designId, versionId) {
 export async function restoreDesignVersion(company, user, designId, versionId) {
   const design = await getDesign(company, designId);
   const version = await getDesignVersion(company, designId, versionId);
+  await assertBookedDealUnchanged(company, design, { summary: version.summary || undefined });
   design.data = version.data;
   design.markModified('data');
   if (version.summary) {

@@ -4,26 +4,31 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { env } from '../config/env.js';
+import { hasPermission } from '../middlewares/auth.middleware.js';
 import { ROLES } from '../constants/index.js';
-import { Ticket } from '../models/index.js';
+import { ClientTicket, Ticket } from '../models/index.js';
 import { forbidden, notFound } from '../utils/HttpError.js';
 
 export const SAFE_NAME = /^[\w][\w.-]{0,200}$/;
 export const LINK_TTL_MS = 10 * 60 * 1000;
+/** Signed links sent to clients (e.g. WhatsApp) stay valid long enough to open later. */
+export const SHARE_LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const DOC = /^[0-9a-f]{24}-doc-/; // client documents:   <companyId>-doc-…
 const STEP = /^[0-9a-f]{24}-step-/; // installation photos: <companyId>-step-…
-const TICKET = /^ticket-/; // support attachments: ticket-…
+const TICKET = /^ticket-/; // support attachments (company ↔ platform): ticket-…
+const CLIENT_TICKET = /^cticket-/; // client support attachments (company ↔ client): cticket-…
 const DESIGN_VERSION = /^[0-9a-f]{24}-design-/; // archived quotation PDFs: <companyId>-design-<designId>-v-…
 const INVOICE_PDF = /^[0-9a-f]{24}-invoice-/; // archived tax invoices: <companyId>-invoice-<invoiceId>-…
+const RECEIPT_PDF = /^[0-9a-f]{24}-receipt-/; // payment receipts: <companyId>-receipt-<paymentId>-…
 
-export const isProtected = (name) => DOC.test(name) || STEP.test(name) || TICKET.test(name) || DESIGN_VERSION.test(name) || INVOICE_PDF.test(name);
+export const isProtected = (name) => DOC.test(name) || STEP.test(name) || TICKET.test(name) || CLIENT_TICKET.test(name) || DESIGN_VERSION.test(name) || INVOICE_PDF.test(name) || RECEIPT_PDF.test(name);
 
 const key = () => crypto.createHash('sha256').update(`file-link:${env.jwtSecret}`).digest();
 const mac = (name, exp) => crypto.createHmac('sha256', key()).update(`${name}.${exp}`).digest('hex');
 
-export function signName(name, now = Date.now()) {
-  const exp = now + LINK_TTL_MS;
+export function signName(name, now = Date.now(), ttlMs = LINK_TTL_MS) {
+  const exp = now + ttlMs;
   return { exp, sig: mac(name, exp) };
 }
 
@@ -38,20 +43,32 @@ export function validSignature(name, exp, sig, now = Date.now()) {
 
 /** Throws unless `user` may open the protected file `name`. */
 export async function assertCanOpen(user, name) {
+  // client support stays between the company and its client: checked before the platform admin's general access
+  if (CLIENT_TICKET.test(name)) {
+    const url = `/uploads/${name}`;
+    const scope = user.role === ROLES.CLIENT
+      ? (user.client ? { company: user.company, client: user.client } : null)
+      : [ROLES.COMPANY, ROLES.AGENT].includes(user.role) && hasPermission(user, 'helpdesk', 'view') ? { company: user.company } : null;
+    if (scope && (await ClientTicket.exists({ ...scope, 'messages.attachments.url': url }))) return;
+    throw forbidden('You do not have access to this file');
+  }
   if (user.role === ROLES.SUPERADMIN) return;
   const owner = name.slice(0, 24);
+  const ownCompany = String(user.company) === owner;
+  // the owner, or a staff member of the same company who may view the area the file belongs to
+  const mayView = (area) => ownCompany && hasPermission(user, area, 'view');
   if (DOC.test(name)) {
-    if (user.role === ROLES.COMPANY && String(user.company) === owner) return;
+    if (mayView('clients')) return;
   } else if (STEP.test(name)) {
-    if (user.role !== ROLES.CLIENT && String(user.company) === owner) return; // the company's owner and its agents (never a client)
+    if (user.role !== ROLES.CLIENT && ownCompany) return; // the company's owner and its agents (never a client)
   } else if (TICKET.test(name)) {
-    if (user.role !== ROLES.COMPANY) throw forbidden();
+    if (!mayView('support')) throw forbidden();
     const ticket = await Ticket.findOne({ company: user.company, 'messages.attachments.url': `/uploads/${name}` }).select('_id').lean();
     if (ticket) return;
   } else if (DESIGN_VERSION.test(name)) {
-    if (user.role === ROLES.COMPANY && String(user.company) === owner) return;
-  } else if (INVOICE_PDF.test(name)) {
-    if (user.role === ROLES.COMPANY && String(user.company) === owner) return;
+    if (mayView('proposals')) return;
+  } else if (INVOICE_PDF.test(name) || RECEIPT_PDF.test(name)) {
+    if (mayView('finances')) return;
   }
   throw forbidden('You do not have access to this file');
 }
