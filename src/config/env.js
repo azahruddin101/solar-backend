@@ -64,4 +64,13 @@ export const env = {
   frontendUrl: (process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, ''),
   oneSignalAppId: (process.env.ONESIGNAL_APP_ID || '').trim(),
   oneSignalRestApiKey: (process.env.ONESIGNAL_REST_API_KEY || '').trim(),
+  // outgoing email (any SMTP service: Google Workspace, Zoho, Microsoft 365, Amazon SES SMTP…); off until host and from are set
+  smtp: {
+    host: (process.env.SMTP_HOST || '').trim(),
+    port: Number(process.env.SMTP_PORT) || 587,
+    secure: process.env.SMTP_SECURE === 'true' || Number(process.env.SMTP_PORT) === 465,
+    user: (process.env.SMTP_USER || '').trim(),
+    pass: process.env.SMTP_PASS || '',
+    from: (process.env.SMTP_FROM || '').trim(), // the sending address, e.g. notifications@yourdomain.com
+  },
 };

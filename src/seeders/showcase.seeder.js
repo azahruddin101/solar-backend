@@ -4,7 +4,8 @@
 //   npm run seed:showcase -- --replace   delete it and create it again
 import mongoose from 'mongoose';
 import { DEFAULT_INSTALLATION_STEPS, ROLES } from '../constants/index.js';
-import { Category, Client, Company, Design, Notification, Package, Plan, Product, Project, Ticket, User } from '../models/index.js';
+import { Client, Company, Design, Notification, Package, Plan, Project, SerialUnit, Ticket, User } from '../models/index.js';
+import { billingService } from '../services/billing.service.js';
 import { applyPlanLimitsToCompany } from '../services/plan.service.js';
 import { deleteCompany } from '../services/company.service.js';
 import { putFile } from '../services/storage.service.js';
@@ -14,6 +15,7 @@ import { DEMO_PASSWORD } from './data/companies.js';
 import { SHOWCASE_AGENTS, SHOWCASE_CATEGORIES, SHOWCASE_CLIENTS, SHOWCASE_COMPANY, SHOWCASE_DESIGNS, SHOWCASE_INSTALLATIONS, SHOWCASE_LOGIN, SHOWCASE_PACKAGES, SHOWCASE_TICKETS } from './data/showcase.js';
 import { writeBrandImages } from './demo.seeder.js';
 import { ensureDefaultPlans } from './plans.seeder.js';
+import { seedShowcaseCatalog } from './showcaseCatalog.js';
 
 const daysAgo = (n, hours = 0) => new Date(Date.now() - n * 86400000 + hours * 3600000);
 
@@ -74,16 +76,8 @@ export async function seedShowcase({ replace = false } = {}) {
     agents.set(a.email.split('@')[0], agent);
   }
 
-  /* catalog */
-  const bySku = new Map();
-  for (const [position, c] of SHOWCASE_CATEGORIES.entries()) {
-    const { products, ...fields } = c;
-    const category = await Category.create({ ...fields, type: fields.type || 'general', company: company._id, position: position + 1 });
-    for (const p of products) {
-      const product = await Product.create({ ...p, company: company._id, category: category._id, type: category.type });
-      if (p.sku) bySku.set(p.sku, product);
-    }
-  }
+  /* catalog, suppliers and stock */
+  const bySku = await seedShowcaseCatalog(company._id);
   for (const pkg of SHOWCASE_PACKAGES) {
     const { lines, ...fields } = pkg;
     const items = lines.map(([sku, qty]) => {
@@ -153,6 +147,20 @@ export async function seedShowcase({ replace = false } = {}) {
     if (complete) design.logs.push({ action: 'installation_completed', by: owner._id, byName: owner.name, byRole: ROLES.COMPANY, message: 'All installation steps finished', at: steps.at(-1).completedAt });
     await design.save();
   }
+
+  /* one counter sale (so units show every status) */
+  const stockLine = async (sku, qty) => {
+    const product = bySku.get(sku);
+    if (!product.isSerialized) return { productId: product.id, qty };
+    const units = await SerialUnit.find({ product: product._id, status: 'inStock' }).sort({ serialNo: 1 }).limit(qty).lean();
+    return { productId: product.id, serials: units.map((u) => u.serialNo) };
+  };
+  const battery = await stockLine('BAT-EX-150', 2);
+  await billingService.createDirectInvoice(company, owner, {
+    billTo: { name: 'Kale Agro Services', phone: '9822045566', address: 'Hadapsar, Pune 411028' },
+    title: 'Counter sale – inverter batteries',
+    pricing: { lines: [{ name: 'Exide 12 V 150 Ah solar tubular battery', ...battery, priceType: 'retail', rate: 0 }, { name: 'Battery installation & wiring', qty: 1, unit: 'Nos', rate: 1500, gstPercent: 18 }], gstIncluded: false, withGst: true, invoiceGstMode: 'with_gst' },
+  });
 
   /* support tickets (need a super admin to answer) */
   const admin = await User.findOne({ role: ROLES.SUPERADMIN });

@@ -1,7 +1,20 @@
 import mongoose from 'mongoose';
-import { CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, DESIGN_GRID_TYPES, DESIGN_STATUS } from '../constants/index.js';
+import { AMC_REQUEST_STATUS, CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, DESIGN_GRID_TYPES, DESIGN_STATUS } from '../constants/index.js';
 import { activityLogSchema } from './activityLog.schema.js';
-import { schemaOptions, text } from './schemaOptions.js';
+import { schemaOptions, subSchemaOptions, text } from './schemaOptions.js';
+
+const amcRequestSchema = new mongoose.Schema({
+  packageName: { type: String, required: true, trim: true, maxlength: 80 },
+  requestedDate: { type: Date, required: true },
+  note: text(500),
+  status: { type: String, enum: AMC_REQUEST_STATUS, default: 'requested' },
+  assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  assigneeName: text(120),
+  assignedAt: { type: Date, default: null },
+  assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  requestedAt: { type: Date, default: Date.now },
+  requestedBy: { type: String, enum: ['client', 'company'], default: 'client' }, // who raised it: the client from the portal, or the company on their behalf
+}, subSchemaOptions);
 
 const designSchema = new mongoose.Schema(
   {
@@ -40,6 +53,10 @@ const designSchema = new mongoose.Schema(
       annualKwh: { type: Number, default: 0 },
       pricing: { type: mongoose.Schema.Types.Mixed, default: null }, // price breakdown (lines, GST, total) used for receipts and the invoice
     },
+    /** Optional AMC package names the client opted into before / during installation. */
+    amcOptionalSelections: { type: [{ type: String, trim: true, maxlength: 80 }], default: () => [] },
+    /** Client-requested AMC visits (package + preferred date) awaiting company assignment. */
+    amcRequests: { type: [amcRequestSchema], default: () => [] },
     logs: [activityLogSchema],
   },
   { ...schemaOptions, minimize: false },

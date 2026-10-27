@@ -5,6 +5,7 @@ import { env } from '../config/env.js';
 import { Design, Notification, User } from '../models/index.js';
 import { effectiveFrom, rolesById } from './permission.service.js';
 import { isOneSignalConfigured, sendPush } from './onesignal.service.js';
+import { emailAmcAssigned, emailAmcCompleted, emailAmcRequested, emailAmcUpcoming } from './amcEmail.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
 
 /** Save the inbox rows; a duplicate (same event, same user) is silently skipped by the unique index. */
@@ -212,4 +213,91 @@ async function sendClientProposalReadyForReview({ companyId, clientId, designId,
   };
   await record(audiences, { ...msg, company: companyId, type: 'proposal_ready_for_review', eventKey: `proposal-review:${eventId}` });
   await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...msg, idempotencyKey: `proposal-review:${eventId}` });
+}
+
+/* ───────────── AMC (maintenance visits) ───────────── */
+
+const ownerIdsOf = async (companyId) => (await User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean()).map((u) => String(u._id));
+/** Active staff of the company holding `permission` through their roles or own grants (resolved now, so it follows role changes). */
+async function staffIdsWith(companyId, permission) {
+  const [staff, roles] = await Promise.all([
+    User.find({ company: companyId, role: ROLES.AGENT, active: true }).select('_id permissions staffRoles').lean(),
+    rolesById(companyId),
+  ]);
+  return staff.filter((u) => effectiveFrom(u, roles).includes(permission)).map((u) => String(u._id));
+}
+const clientUserIdsOf = async (companyId, clientId) => (await User.find({ company: companyId, role: ROLES.CLIENT, client: clientId, active: true }).select('_id').lean()).map((u) => String(u._id));
+const shortDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+async function sendTo(audiences, message, companyId, type, eventKey) {
+  await record(audiences, { ...message, company: companyId, type, eventKey });
+  await deliver(audiences.map((a) => ({ userIds: a.userIds, url: `${env.frontendUrl}${a.path}` })), { ...message, idempotencyKey: eventKey });
+}
+
+/** A client booked a paid AMC package: the company owner(s) and staff who may assign AMC visits assign someone from the AMC tracker. */
+export function notifyAmcRequested(payload) {
+  sendAmcRequested(payload).catch((e) => console.error(`[push] AMC request notification failed: ${e.message}`));
+  emailAmcRequested(payload).catch((e) => console.error(`[mail] AMC request emails failed: ${e.message}`));
+}
+
+async function sendAmcRequested({ companyId, designName, packageName, requestedDate, eventId }) {
+  const [ownerIds, assignerIds] = await Promise.all([ownerIdsOf(companyId), staffIdsWith(companyId, 'tasks:assign')]);
+  const audiences = [{ userIds: ownerIds, path: '/dashboard/amc' }, { userIds: assignerIds, path: '/agent/amc?scope=all' }];
+  const message = {
+    title: 'New AMC request',
+    body: `${packageName} requested for ${shortDate(requestedDate)}${designName ? ` (${designName})` : ''}. Assign staff to it.`,
+    data: { event: 'amc_requested' },
+  };
+  await sendTo(audiences, message, companyId, 'amc_requested', `amc-requested:${eventId}`);
+}
+
+/** Staff were assigned to a client's AMC request: tell the staff member and the client. */
+export function notifyAmcAssigned(payload) {
+  sendAmcAssigned(payload).catch((e) => console.error(`[push] AMC assignment notification failed: ${e.message}`));
+  emailAmcAssigned(payload).catch((e) => console.error(`[mail] AMC assignment emails failed: ${e.message}`));
+}
+
+async function sendAmcAssigned({ companyId, clientId, projectId, designName, packageName, requestedDate, assigneeId, assigneeName, actorId, eventId }) {
+  const when = shortDate(requestedDate);
+  const site = designName ? ` (${designName})` : '';
+  const clientIds = await clientUserIdsOf(companyId, clientId);
+  const staff = { userIds: assigneeId && assigneeId !== actorId ? [assigneeId] : [], path: `/agent/projects/${projectId}` };
+  const client = { userIds: clientIds, path: '/portal/maintenance' };
+  await sendTo([staff], {
+    title: 'AMC visit assigned to you',
+    body: `${packageName} on ${when}${site}.`,
+    data: { event: 'amc_assigned', installationId: projectId },
+  }, companyId, 'amc_assigned', `amc-assigned:${eventId}`);
+  await sendTo([client], {
+    title: 'Technician assigned for your AMC visit',
+    body: `${assigneeName || 'A technician'} will visit for ${packageName} on ${when}.`,
+    data: { event: 'amc_assigned' },
+  }, companyId, 'amc_assigned', `amc-assigned-client:${eventId}`);
+}
+
+/** A free (included) AMC visit is due soon: no booking needed, just a heads-up for the company and the client. */
+export function notifyAmcUpcoming(payload) {
+  sendAmcUpcoming(payload).catch((e) => console.error(`[push] upcoming AMC notification failed: ${e.message}`));
+  emailAmcUpcoming(payload).catch((e) => console.error(`[mail] upcoming AMC emails failed: ${e.message}`));
+}
+
+/** An AMC visit was completed: emails to the client, the company and the assigned staff member (see amcEmail.service.js). */
+export function notifyAmcCompleted(payload) {
+  emailAmcCompleted(payload).catch((e) => console.error(`[mail] AMC completion emails failed: ${e.message}`));
+}
+
+async function sendAmcUpcoming({ companyId, clientId, projectId, designName, visitName, dueDate, eventId }) {
+  const [ownerIds, assignerIds, clientIds] = await Promise.all([ownerIdsOf(companyId), staffIdsWith(companyId, 'tasks:assign'), clientUserIdsOf(companyId, clientId)]);
+  const when = shortDate(dueDate);
+  const site = designName ? ` (${designName})` : '';
+  await sendTo([{ userIds: ownerIds, path: `/dashboard/installations/${projectId}` }, { userIds: assignerIds, path: `/agent/installations/${projectId}` }], {
+    title: 'Upcoming free AMC visit',
+    body: `${visitName} is due on ${when}${site}.`,
+    data: { event: 'amc_upcoming', installationId: projectId },
+  }, companyId, 'amc_upcoming', `amc-upcoming:${eventId}`);
+  await sendTo([{ userIds: clientIds, path: '/portal/maintenance' }], {
+    title: 'Your free maintenance visit is coming up',
+    body: `${visitName} is scheduled for ${when}${site}. No booking needed — your provider will visit.`,
+    data: { event: 'amc_upcoming' },
+  }, companyId, 'amc_upcoming', `amc-upcoming:${eventId}`);
 }

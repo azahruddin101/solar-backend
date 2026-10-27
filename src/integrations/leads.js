@@ -39,6 +39,7 @@ export const leadHandlers = {
   exportLeads: require(path.join(root, 'controllers/leadExportController.js')).exportLeads,
   manual: require(path.join(root, 'controllers/manualLeadController.js')),
   manualPriority: setLeadPriority(require(path.join(root, 'models/ManualLead.js'))),
+  allList: require(path.join(root, 'controllers/allLeadsController.js')).listAllLeads,
 };
 export const { bindLeadsTenant } = require(path.join(root, 'middleware/tenant.js'));
 export const leadForm = require(path.join(root, 'utils/leadForm.js'));

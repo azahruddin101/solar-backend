@@ -15,6 +15,28 @@ const installationStepSchema = new mongoose.Schema(
   subSchemaOptions,
 );
 
+/** A step of the company's loan process: copied onto each client's loan when it is opened. */
+const loanStepSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: [true, 'Step name is required'], trim: true, maxlength: 80 },
+    description: text(400),
+  },
+  subSchemaOptions,
+);
+
+/** Company-wide AMC schedule: copied onto each installation when it is completed. */
+const amcTemplateSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: [true, 'AMC name is required'], trim: true, maxlength: 80 },
+    daysAfterInstallation: { type: Number, default: null, min: 1, max: 3650 },
+    kind: { type: String, enum: ['mandatory', 'optional'], default: 'mandatory' },
+    price: { type: Number, default: 0, min: 0 },
+    description: text(30000, { trim: false }),
+    criteria: { type: [{ type: String, trim: true, maxlength: 200 }], default: () => [], validate: [(v) => v.length <= 40, 'Up to 40 criteria per AMC'] },
+  },
+  subSchemaOptions,
+);
+
 const companySchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 120 },
@@ -75,6 +97,10 @@ const companySchema = new mongoose.Schema(
 
     // installation workflow template: copied into a project when an installation starts
     installationSteps: [installationStepSchema],
+    // AMC visits scheduled after installation completes (days counted from completion date)
+    amcTemplates: { type: [amcTemplateSchema], default: () => [] },
+    // loan process template: copied onto a client's loan when the client is marked as buying with a loan
+    loanSteps: { type: [loanStepSchema], default: () => [] },
 
     // pricing used by the designer
     currency: text(8, { default: 'INR' }),

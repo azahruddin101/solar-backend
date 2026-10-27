@@ -64,16 +64,16 @@ export async function parseInvoiceNumbering(company, input) {
 }
 
 /** Atomically take the next number for `company`. Each call returns a new number, even under concurrent requests. */
-export async function reserveInvoiceNo(company) {
+export async function reserveInvoiceNo(company, session = null) {
   // One-time seeding for legacy companies (`next` still null): continue from the old counter. The filter makes the
   // seeding itself race-free — only one of several concurrent first calls can match `next: null`.
   if (company.invoiceNumbering?.next == null) {
-    await Company.updateOne({ _id: company._id, 'invoiceNumbering.next': null }, { $set: { 'invoiceNumbering.next': await legacyNextSeq(company) } });
+    await Company.updateOne({ _id: company._id, 'invoiceNumbering.next': null }, { $set: { 'invoiceNumbering.next': await legacyNextSeq(company) } }, { session });
   }
   const before = await Company.findOneAndUpdate(
     { _id: company._id, 'invoiceNumbering.next': { $type: 'number' } },
     { $inc: { 'invoiceNumbering.next': 1 } },
-    { returnDocument: 'before', projection: { invoiceNumbering: 1 } },
+    { returnDocument: 'before', projection: { invoiceNumbering: 1 }, session },
   );
   if (!before) throw badRequest('Invoice numbering is not set up for this company');
   return formatInvoiceNo(before.invoiceNumbering, before.invoiceNumbering.next);
@@ -85,10 +85,17 @@ const isDuplicateNo = (e) => e?.code === 11000 && (e?.keyPattern?.invoiceNo || /
 /**
  * Create an invoice with the next free number. If a reserved number already exists (the owner pointed the counter
  * at numbers that were issued earlier), it is skipped and the next one is tried.
+ * Inside a transaction (`session`) a failed insert would abort the whole transaction, so taken numbers are checked
+ * first instead; the $inc on the company makes concurrent transactions conflict and retry rather than collide.
  */
-export async function createNumberedInvoice(company, fields) {
+export async function createNumberedInvoice(company, fields, { session = null } = {}) {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const invoiceNo = await reserveInvoiceNo(company);
+    const invoiceNo = await reserveInvoiceNo(company, session);
+    if (session) {
+      if (await Invoice.exists({ company: company._id, invoiceNo }).session(session)) continue;
+      const [created] = await Invoice.create([{ ...fields, invoiceNo }], { session });
+      return created;
+    }
     try {
       return await Invoice.create({ ...fields, invoiceNo });
     } catch (e) {

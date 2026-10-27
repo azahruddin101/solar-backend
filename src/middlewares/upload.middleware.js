@@ -15,8 +15,14 @@ import { HttpError, badRequest } from '../utils/HttpError.js';
 const TMP_DIR = path.join(os.tmpdir(), 'solar-uploads');
 fs.mkdirSync(TMP_DIR, { recursive: true });
 
-/** What a file really is, from its first bytes (the declared type and file name are chosen by the sender). */
-async function sniffType(filePath) {
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const XLS = 'application/vnd.ms-excel';
+
+/**
+ * What a file really is, from its first bytes (the declared type and file name are chosen by the sender). Excel files
+ * are containers (XLSX a ZIP, XLS an OLE file), so those are only taken as Excel when the name says so too.
+ */
+async function sniffType(filePath, originalName = '') {
   const fh = await fs.promises.open(filePath, 'r');
   try {
     const { buffer, bytesRead } = await fh.read(Buffer.alloc(16), 0, 16, 0);
@@ -25,6 +31,9 @@ async function sniffType(filePath) {
     if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
     if (b.length >= 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
     if (b.length >= 5 && b.subarray(0, 5).toString('latin1') === '%PDF-') return 'application/pdf';
+    const ext = path.extname(String(originalName)).toLowerCase();
+    if (ext === '.xlsx' && b.length >= 4 && b.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) return XLSX;
+    if (ext === '.xls' && b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) return XLS;
     return null;
   } finally {
     await fh.close();
@@ -33,6 +42,7 @@ async function sniffType(filePath) {
 
 const IMAGES = ['image/png', 'image/jpeg', 'image/webp'];
 const IMAGES_AND_PDF = [...IMAGES, 'application/pdf'];
+const LOAN_DOC_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'application/pdf': 'pdf', [XLSX]: 'xlsx', [XLS]: 'xls' };
 
 const rand = (bytes) => crypto.randomBytes(bytes).toString('hex');
 const imageFilter = (req, file, cb) => (IMAGE_TYPES[file.mimetype] ? cb(null, true) : cb(badRequest('Upload a PNG, JPG or WebP image')));
@@ -44,7 +54,7 @@ const uploadLimit = rateLimit({ name: 'upload', windowMs: 10 * 60 * 1000, max: 6
 const MAX_IN_FLIGHT_PER_USER = 3;
 const inFlight = new Map();
 
-function withStorage(parse, nameFor, allowed = IMAGES) {
+function withStorage(parse, nameFor, allowed = IMAGES, invalidMessage = allowed === IMAGES ? 'That file is not a valid PNG, JPG or WebP image' : 'That file is not a valid PNG, JPG, WebP image or PDF') {
   return (req, res, next) => uploadLimit(req, res, (limited) => {
     if (limited) return next(limited); // over the limit: refuse before reading the request body
     const who = req.user ? String(req.user.id) : req.ip;
@@ -65,8 +75,8 @@ function withStorage(parse, nameFor, allowed = IMAGES) {
       const stored = [];
       try {
         for (const file of files) {
-          const real = await sniffType(file.path);
-          if (!real || !allowed.includes(real)) throw badRequest(allowed === IMAGES ? 'That file is not a valid PNG, JPG or WebP image' : 'That file is not a valid PNG, JPG, WebP image or PDF');
+          const real = await sniffType(file.path, file.originalname);
+          if (!real || !allowed.includes(real)) throw badRequest(invalidMessage);
           file.mimetype = real; // trust the content, not the header the sender chose
           file.filename = nameFor(req, file);
           await putFile(file.filename, file.path, file.mimetype); // streamed from the temporary file
@@ -84,7 +94,8 @@ function withStorage(parse, nameFor, allowed = IMAGES) {
 }
 
 const storage = multer.diskStorage({ destination: TMP_DIR, filename: (req, file, cb) => cb(null, `${Date.now()}-${rand(8)}`) });
-const memory = (limits, fileFilter) => multer({ storage, limits, fileFilter });
+// defParamCharset: browsers send file names as UTF-8 (e.g. the narrow space in macOS screenshot names); multer assumes Latin-1
+const memory = (limits, fileFilter) => multer({ storage, limits, fileFilter, defParamCharset: 'utf8' });
 
 /** Branding images (logo, e-signature, QR code). */
 export const uploadImage = withStorage(
@@ -108,6 +119,12 @@ export const uploadAgentPhoto = withStorage(
   (req, file) => `${req.company.id}-agent-${req.params.id}-${rand(6)}.${IMAGE_TYPES[file.mimetype] || 'jpg'}`,
 );
 
+/** Optional catalog category icon (small PNG/JPG/WebP). */
+export const uploadCategoryIcon = withStorage(
+  memory({ fileSize: 50 * 1024, files: 1 }, imageFilter).single('file'),
+  (req, file) => `${req.company.id}-cat-${req.params.id}-${rand(6)}.${IMAGE_TYPES[file.mimetype] || 'jpg'}`,
+);
+
 /** Field photo when an installation step is marked done (optional). */
 export const uploadStepPhoto = withStorage(
   memory({ fileSize: 5 * 1024 * 1024, files: 1 }, imageFilter).single('file'),
@@ -126,6 +143,29 @@ export const uploadInvoicePdf = withStorage(
   memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
   (req, file) => `${req.company.id}-invoice-${req.params.id}-${rand(8)}.pdf`,
   ['application/pdf'],
+);
+
+/** The supplier's bill for a stock receipt: PNG, JPG, WebP or PDF, up to 20 MB. */
+export const uploadStockBill = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (TICKET_FILE_TYPES[file.mimetype] ? cb(null, true) : cb(badRequest('Upload a PNG, JPG, WebP image or a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-bill-${/^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : 'x'}-${rand(8)}.${TICKET_FILE_TYPES[file.mimetype]}`,
+  IMAGES_AND_PDF,
+);
+
+/** A PDF kept with a catalog product (datasheet, warranty card, manual…). */
+export const uploadProductDocument = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-proddoc-${/^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : 'x'}-${rand(8)}.pdf`,
+  ['application/pdf'],
+);
+
+/** A document on a loan step: PNG, JPG, WebP, PDF or Excel (XLSX / XLS), up to 20 MB. */
+const LOAN_DOC_MESSAGE = 'Upload a PDF, a PNG / JPG / WebP image or an Excel file (XLSX, XLS)';
+export const uploadLoanDocument = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (/\.(pdf|png|jpe?g|webp|xlsx|xls)$/i.test(file.originalname || '') ? cb(null, true) : cb(badRequest(LOAN_DOC_MESSAGE)))).single('file'),
+  (req, file) => `${req.company.id}-loandoc-${/^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : 'x'}-${rand(8)}.${LOAN_DOC_TYPES[file.mimetype]}`,
+  Object.keys(LOAN_DOC_TYPES),
+  'That file is not a valid PDF, PNG, JPG, WebP image or Excel file',
 );
 
 /** Payment receipt PDF (stored in S3 or local uploads). */

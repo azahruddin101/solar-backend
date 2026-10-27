@@ -2,12 +2,24 @@ import mongoose from 'mongoose';
 import { PAYMENT_MODES } from '../constants/index.js';
 import { schemaOptions, text } from './schemaOptions.js';
 
-// A payment received against a won proposal. Each one is a receipt (`receiptNo`).
+const billToSchema = new mongoose.Schema(
+  {
+    name: text(120),
+    phone: text(40),
+    email: text(200, { lowercase: true }),
+    address: text(400),
+  },
+  { _id: false },
+);
+
+// A payment received against a won proposal, or a standalone "direct" receipt with no proposal.
 const paymentSchema = new mongoose.Schema(
   {
     company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
-    design: { type: mongoose.Schema.Types.ObjectId, ref: 'Design', required: true, index: true },
-    client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true },
+    design: { type: mongoose.Schema.Types.ObjectId, ref: 'Design', default: null, index: true },
+    client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', default: null },
+    billTo: { type: billToSchema, default: null },
+    title: text(160),
     receiptNo: { type: String, required: true },
     amount: { type: Number, required: true, min: 0.01 },
     mode: { type: String, enum: PAYMENT_MODES, default: 'cash' },

@@ -2,7 +2,15 @@ import * as designService from '../services/design.service.js';
 import { getLifecycle } from '../services/lifecycle.service.js';
 
 export async function list(req, res) {
-  res.json(await designService.listDesigns(req.company, { client: req.query.client, page: req.query.page, limit: req.query.limit }));
+  res.json(
+    await designService.listDesigns(req.company, {
+      client: req.query.client,
+      page: req.query.page,
+      limit: req.query.limit,
+      from: req.query.from,
+      to: req.query.to,
+    }),
+  );
 }
 
 export async function create(req, res) {

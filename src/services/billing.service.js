@@ -1,13 +1,16 @@
 // Receipts and tax invoices for booked proposals (each invoice generation is stored separately).
-import { Client, Counter, Design, Invoice, Payment } from '../models/index.js';
+import mongoose from 'mongoose';
+import { Batch, Client, Counter, Design, Invoice, Payment, Product, Project } from '../models/index.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { parsePagination, toApiJSON, toApiJSONList } from '../utils/lean.js';
+import { dateRangeOnField } from '../utils/listFilters.js';
 import { cleanRichText } from '../utils/richText.js';
 import { objectId } from '../utils/validators.js';
 import { createNumberedInvoice, peekInvoiceNo } from './invoiceNumber.service.js';
 import { authorityInvoicePricing, resolveInvoicePricing } from './invoicePricing.service.js';
 import { revokeSharesForPdf } from './fileShare.service.js';
 import { deleteFile } from './storage.service.js';
+import { allocateInvoiceLines, inTransaction } from './stock.service.js';
 
 const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
@@ -50,6 +53,32 @@ async function ledger(company, design) {
   };
 }
 
+const DETAIL_FIELDS = { reference: 120, otherReferences: 120, buyerOrderNo: 80, buyerOrderDate: 20, dispatchDocNo: 80, deliveryNoteDate: 20, dispatchedThrough: 120, destination: 120, termsOfDelivery: 300 };
+
+/** The optional reference & delivery details of an invoice: known fields only, trimmed; null when none were filled in. */
+export function cleanInvoiceDetails(input) {
+  if (!input || typeof input !== 'object') return null;
+  const out = {};
+  for (const [key, max] of Object.entries(DETAIL_FIELDS)) {
+    const v = String(input[key] ?? '').trim().slice(0, max);
+    if (v) out[key] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Creates the invoice and takes the stock of its product lines in one transaction: either both happen or neither.
+ * `pricingFor(lines)` turns the stock-allocated lines into the stored pricing (totals recomputed on the server).
+ */
+async function issueInvoice(company, inputLines, pricingFor, fields) {
+  return inTransaction(async (session) => {
+    const invoiceId = new mongoose.Types.ObjectId(); // the sold units point at it
+    const lines = await allocateInvoiceLines(company, inputLines, { invoiceId, session });
+    const pricing = pricingFor(lines);
+    return createNumberedInvoice(company, { _id: invoiceId, ...fields, total: money(pricing.total), pricing }, { session });
+  });
+}
+
 /**
  * Stores the PDF of an issued invoice or receipt — once. The archived PDF is the document the client was given, so it
  * is never replaced or deleted afterwards (a second upload is refused and its file removed). The check and the write
@@ -76,8 +105,9 @@ async function archivePdfOnce(Model, what, company, id, pdfName) {
 
 export const billingService = {
   /** Every won proposal with what has been received so far. */
-  async overview(company) {
-    const designs = await Design.find({ company: company._id, status: 'won' }).select('-data').populate('client', 'name phone email').sort({ updatedAt: -1 });
+  async overview(company, { from, to } = {}) {
+    const match = { company: company._id, status: 'won', ...(dateRangeOnField('createdAt', from, to) || {}) };
+    const designs = await Design.find(match).select('-data').populate('client', 'name phone email').sort({ updatedAt: -1 });
     const sums = await Payment.aggregate([{ $match: { company: company._id, design: { $in: designs.map((d) => d._id) } } }, { $group: { _id: '$design', paid: { $sum: '$amount' }, count: { $sum: 1 } } }]);
     const invoices = await Invoice.find({ company: company._id, design: { $in: designs.map((d) => d._id) } }).select('design invoiceNo createdAt').sort({ createdAt: -1 });
     const latestInv = new Map();
@@ -94,23 +124,67 @@ export const billingService = {
     });
   },
 
-  async listPayments(company, { page, limit } = {}) {
-    const filter = { company: company._id };
+  async listPayments(company, { page, limit, from, to } = {}) {
+    const match = { company: company._id, ...(dateRangeOnField('receivedOn', from, to) || {}) };
     const { page: p, limit: l, skip } = parsePagination({ page, limit });
-    const [items, total] = await Promise.all([
-      Payment.find(filter).sort({ createdAt: -1 }).skip(skip).limit(l).populate('client', 'name').populate('design', 'name').lean(),
-      Payment.countDocuments(filter),
+    const [facet] = await Payment.aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1 } },
+      {
+        $lookup: {
+          from: 'clients',
+          localField: 'client',
+          foreignField: '_id',
+          as: 'client',
+          pipeline: [{ $project: { name: 1 } }],
+        },
+      },
+      { $unwind: { path: '$client', preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: 'designs',
+          localField: 'design',
+          foreignField: '_id',
+          as: 'design',
+          pipeline: [{ $project: { name: 1 } }],
+        },
+      },
+      { $unwind: { path: '$design', preserveNullAndEmptyArrays: true } },
+      {
+        $facet: {
+          meta: [{ $count: 'total' }],
+          rows: [{ $skip: skip }, { $limit: l }],
+        },
+      },
     ]);
-    return { items: toApiJSONList(items), total, page: p, limit: l };
+    const total = facet?.meta?.[0]?.total ?? 0;
+    return { items: toApiJSONList(facet?.rows ?? []), total, page: p, limit: l };
   },
-  async listInvoices(company, { page, limit } = {}) {
-    const filter = { company: company._id };
+  async listInvoices(company, { page, limit, from, to } = {}) {
+    const match = { company: company._id, ...(dateRangeOnField('issuedOn', from, to) || {}) };
     const { page: p, limit: l, skip } = parsePagination({ page, limit });
-    const [items, total] = await Promise.all([
-      Invoice.find(filter).sort({ createdAt: -1 }).skip(skip).limit(l).populate('client', 'name').lean(),
-      Invoice.countDocuments(filter),
+    const [facet] = await Invoice.aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1 } },
+      {
+        $lookup: {
+          from: 'clients',
+          localField: 'client',
+          foreignField: '_id',
+          as: 'client',
+          pipeline: [{ $project: { name: 1 } }],
+        },
+      },
+      { $unwind: { path: '$client', preserveNullAndEmptyArrays: true } },
+      {
+        $facet: {
+          meta: [{ $count: 'total' }],
+          rows: [{ $skip: skip }, { $limit: l }],
+        },
+      },
     ]);
-    return { items: toApiJSONList(items), total, page: p, limit: l };
+    const total = facet?.meta?.[0]?.total ?? 0;
+    return { items: toApiJSONList(facet?.rows ?? []), total, page: p, limit: l };
   },
 
   async get(company, designId) {
@@ -119,6 +193,7 @@ export const billingService = {
     // Get the most recent invoice's T&C for pre-filling the form
     const latestInvoice = await Invoice.findOne({ company: company._id, design: design._id }).sort({ createdAt: -1 }).lean();
     result.previousTermsAndConditions = latestInvoice?.termsAndConditions || '';
+    result.previousBillToCompany = latestInvoice?.billToCompany || '';
     result.nextInvoiceNo = await peekInvoiceNo(company);
     return result;
   },
@@ -150,6 +225,44 @@ export const billingService = {
     return { payment, ...(await ledger(company, design)) };
   },
 
+  /** Standalone receipt (no proposal): payer in `billTo`, optional link to an existing client. */
+  async createDirectReceipt(company, user, body = {}) {
+    const amount = money(body.amount);
+    if (!(amount > 0)) throw badRequest('Enter the amount received');
+    const billTo = {
+      name: String(body.billTo?.name || '').trim(),
+      phone: body.billTo?.phone || '',
+      email: body.billTo?.email || '',
+      address: body.billTo?.address || '',
+    };
+    if (!billTo.name) throw badRequest('Enter who the payment is from');
+    let clientId = null;
+    if (body.client) {
+      const client = await Client.findOne({ _id: objectId(body.client, 'Client'), company: company._id }).select('_id').lean();
+      if (!client) throw notFound('Client');
+      clientId = client._id;
+    }
+    const receivedOn = body.receivedOn ? new Date(body.receivedOn) : new Date();
+    if (Number.isNaN(receivedOn.getTime())) throw badRequest('Invalid payment date');
+    const payment = await Payment.create({
+      company: company._id,
+      design: null,
+      client: clientId,
+      billTo,
+      title: String(body.title || '').trim() || billTo.name,
+      receiptNo: await nextNumber(company, 'receipt', 'RCT'),
+      amount,
+      mode: body.mode,
+      reference: body.reference || '',
+      receivedOn,
+      note: body.note || '',
+      contractTotal: amount,
+      balanceAfter: 0,
+      createdByName: user?.name || user?.email || '',
+    });
+    return { payment: toApiJSON(payment.toObject()) };
+  },
+
   /** Only the latest receipt can be cancelled. */
   async removePayment(company, id) {
     const payment = await Payment.findOne({ _id: objectId(id, 'Receipt'), company: company._id });
@@ -174,17 +287,20 @@ export const billingService = {
     const l = await ledger(company, design);
     if (design.status !== 'won') throw badRequest('The proposal must be Booked');
     if (!(l.total > 0)) throw badRequest('This proposal has no price yet');
-    const pricing = resolveInvoicePricing(body.pricing, design.summary?.pricing);
-    if (!pricing) throw badRequest('This proposal has no price yet');
-    const invTotal = money(pricing.total);
-    if (!(invTotal > 0)) throw badRequest('Invoice total must be greater than zero');
-    const created = await createNumberedInvoice(company, {
+    const input = body.pricing && typeof body.pricing === 'object' ? body.pricing : design.summary?.pricing;
+    const pricingFor = (lines) => {
+      const pricing = resolveInvoicePricing(body.pricing ? { ...body.pricing, lines } : null, input?.lines?.length ? { ...input, lines } : design.summary?.pricing);
+      if (!pricing) throw badRequest('This proposal has no price yet');
+      if (!(money(pricing.total) > 0)) throw badRequest('Invoice total must be greater than zero');
+      return pricing;
+    };
+    const created = await issueInvoice(company, input?.lines || [], pricingFor, {
       company: company._id,
       design: design._id,
       client: design.client._id,
       title: design.name,
-      total: invTotal,
-      pricing,
+      billToCompany: String(body.billToCompany || '').trim().slice(0, 120),
+      details: cleanInvoiceDetails(body.details),
       termsAndConditions: cleanRichText(body.termsAndConditions || ''),
       createdByName: user?.name || user?.email || '',
     });
@@ -202,10 +318,11 @@ export const billingService = {
    * lines come straight from the form. Nothing else is created — no client record, no proposal.
    */
   async createDirectInvoice(company, user, body = {}) {
-    const pricing = authorityInvoicePricing(body.pricing);
-    const total = money(pricing.total);
+    // stock lines are priced from their batches inside the transaction; the totals are checked there
+    if (!Array.isArray(body.pricing?.lines) || !body.pricing.lines.some((l) => String(l?.name || '').trim())) throw badRequest('Add at least one line item');
     const billTo = {
       name: String(body.billTo?.name || '').trim(),
+      company: String(body.billTo?.company || '').trim().slice(0, 120),
       phone: body.billTo?.phone || '',
       email: body.billTo?.email || '',
       address: body.billTo?.address || '',
@@ -218,18 +335,36 @@ export const billingService = {
       if (!client) throw notFound('Client');
       clientId = client._id;
     }
-    const created = await createNumberedInvoice(company, {
+    const created = await issueInvoice(company, body.pricing.lines, (lines) => authorityInvoicePricing({ ...body.pricing, lines }), {
       company: company._id,
       design: null,
       client: clientId,
       billTo,
       title: String(body.title || '').trim() || billTo.name,
-      total,
-      pricing,
+      details: cleanInvoiceDetails(body.details),
       termsAndConditions: cleanRichText(body.termsAndConditions || ''),
       createdByName: user?.name || user?.email || '',
     });
     return { createdInvoice: toApiJSON(created.toObject()) };
+  },
+
+  /**
+   * Parts replaced on an AMC visit, billed to the proposal's client: one invoice on the proposal whose lines are taken
+   * from stock and priced from their batches at the chosen price type. project.service records it on the visit.
+   */
+  async createAmcPartsInvoice(company, user, { project, visit, lines, withGst = true }) {
+    const design = await Design.findOne({ _id: project.design, company: company._id }).select('name client');
+    if (!design) throw notFound('Proposal');
+    const input = (lines || []).map((l) => ({ productId: l.productId, qty: l.qty, batch: l.batch, serials: l.serials, priceType: l.priceType || 'retail', name: '', rate: 0 }));
+    const pricingFor = (allocated) => authorityInvoicePricing({ lines: allocated, withGst, invoiceGstMode: withGst ? 'with_gst' : 'without_gst', gstIncluded: false });
+    return issueInvoice(company, input, pricingFor, {
+      company: company._id,
+      design: design._id,
+      client: design.client,
+      title: `${visit.name} — parts used · ${design.name}`.slice(0, 160),
+      termsAndConditions: cleanRichText(company.pdfTerms || ''),
+      createdByName: user?.name || user?.email || '',
+    });
   },
 
   async attachInvoicePdf(company, invoiceId, pdfName) {

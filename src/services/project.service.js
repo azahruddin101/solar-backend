@@ -2,13 +2,23 @@
 // everything that happened. The company owner manages the whole project; agents work on their own steps.
 import { ROLES, STEP_STATUS } from '../constants/index.js';
 import { hasPermission } from '../middlewares/auth.middleware.js';
-import { Design, Project, User } from '../models/index.js';
+import { Client, Company, Design, Invoice, Product, Project, User } from '../models/index.js';
 import { resolveAgentRole, stepPriority } from './company.service.js';
-import { notifyStepAssigned, notifyStepStatusChange } from './notification.service.js';
+import { notifyAmcCompleted, notifyStepAssigned, notifyStepStatusChange } from './notification.service.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
-import { parsePagination, toApiJSONList } from '../utils/lean.js';
+import { dateRangeOnField } from '../utils/listFilters.js';
+import { parsePagination, toApiJSON, toApiJSONList } from '../utils/lean.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
+import { deductStock, inTransaction } from './stock.service.js';
+import { billingService } from './billing.service.js';
+import {
+  ensureProjectAmc,
+  installationCompletionDate,
+  markAmcRequestCompleted,
+  spawnAmcVisitsForProject,
+  syncDesignAmcRequestsToProject,
+} from './amc.service.js';
 
 const MAX_STEPS = 30;
 const AGENT_FIELDS = 'name email phone jobTitle roles photo active';
@@ -57,7 +67,8 @@ function populate(query, role) {
   return query
     .populate('design', owner ? 'name status summary' : 'name summary.address summary.kwp summary.panels')
     .populate('client', owner ? 'name email phone address' : 'name phone address')
-    .populate('steps.assignee', AGENT_FIELDS);
+    .populate('steps.assignee', AGENT_FIELDS)
+    .populate('amcVisits.assignee', AGENT_FIELDS);
 }
 
 function agentHasRole(agent, role) {
@@ -192,13 +203,18 @@ function pendingAssignments(project, user) {
 }
 
 /** The project is complete exactly when every step is done. */
-async function syncStatus(project, user) {
+async function syncStatus(project, user, company = null) {
   const next = project.steps.length && project.steps.every((s) => s.status === 'done') ? 'completed' : 'active';
   if (next === project.status) return;
   project.status = next;
   log(project, user, next === 'completed' ? 'completed' : 'reopened');
   if (next === 'completed') {
-    const designDoc = await Design.findById(project.design);
+    const completedAt = installationCompletionDate(project) || new Date();
+    project.installationCompletedAt = completedAt;
+    const co = company || await Company.findById(project.company).select('amcTemplates');
+    // logs: the completion is noted on the proposal; amcRequests: bookings the client made before the install
+    const designDoc = await Design.findById(project.design).select('amcOptionalSelections amcRequests logs');
+    await spawnAmcVisitsForProject(project, co, { design: designDoc });
     if (designDoc) {
       designDoc.logs.push({
         action: 'installation_completed',
@@ -212,11 +228,13 @@ async function syncStatus(project, user) {
   }
 }
 
-async function saveAndPresent(project, user) {
-  await syncStatus(project, user);
+async function saveAndPresent(project, user, company = null) {
+  await syncStatus(project, user, company);
   const assigned = pendingAssignments(project, user);
   await project.save();
   assigned.forEach(notifyStepAssigned);
+  const doc = await Project.findById(project._id);
+  await ensureProjectAmc(doc, company || { _id: project.company });
   return populate(Project.findById(project._id), user.role);
 }
 
@@ -235,8 +253,10 @@ async function getOwn(company, id) {
 }
 
 /** Lists leave out the logs. Paginated: pass `page`/`limit` (defaults to a single bounded page). */
-export async function listProjects(company, { page, limit } = {}) {
+export async function listProjects(company, { page, limit, from, to } = {}) {
   const filter = { company: company._id };
+  const dateMatch = dateRangeOnField('updatedAt', from, to);
+  if (dateMatch) Object.assign(filter, dateMatch);
   const { page: p, limit: l, skip } = parsePagination({ page, limit });
   const [items, total] = await Promise.all([
     populate(Project.find(filter).select('-logs').sort({ updatedAt: -1 }).skip(skip).limit(l), ROLES.COMPANY).lean(),
@@ -246,8 +266,10 @@ export async function listProjects(company, { page, limit } = {}) {
 }
 
 export async function getProject(company, id) {
-  const project = await populate(Project.findOne({ _id: objectId(id, 'Installation'), company: company._id }), ROLES.COMPANY);
-  if (!project) throw notFound('Installation');
+  const raw = await Project.findOne({ _id: objectId(id, 'Installation'), company: company._id });
+  if (!raw) throw notFound('Installation');
+  await ensureProjectAmc(raw, company);
+  const project = await populate(Project.findById(raw._id), ROLES.COMPANY);
   return project;
 }
 
@@ -262,10 +284,12 @@ export async function startProject(company, user, body) {
     company: company._id,
     design: design._id,
     client: design.client,
+    amcOptionalSelections: [...(design.amcOptionalSelections || [])],
     steps: company.installationSteps.map((s) => ({ name: s.name, description: s.description, role: s.role || '', priority: s.priority })),
   });
   log(project, user, 'started');
   if (project.steps.length) await autoAssignStep(project, project.steps[0], company, user);
+  syncDesignAmcRequestsToProject(design, project, company);
   const assigned = pendingAssignments(project, user);
   await project.save();
   assigned.forEach(notifyStepAssigned);
@@ -293,7 +317,7 @@ export async function addStep(company, user, id, body) {
   const step = project.steps.at(-1);
   log(project, user, 'step_added', step);
   if (agent) log(project, user, 'step_assigned', step, agent.name);
-  return saveAndPresent(project, user);
+  return saveAndPresent(project, user, company);
 }
 
 const need = (user, action, label) => {
@@ -345,7 +369,7 @@ export async function updateStep(company, user, id, stepId, body) {
       project.steps = steps;
     }
   }
-  const saved = await saveAndPresent(project, user);
+  const saved = await saveAndPresent(project, user, company);
   announceStepChange(project, step, user, change);
   return saved;
 }
@@ -356,23 +380,28 @@ export async function removeStep(company, user, id, stepId) {
   if (project.steps.length === 1) throw badRequest('An installation needs at least one step');
   log(project, user, 'step_removed', step);
   step.deleteOne();
-  return saveAndPresent(project, user);
+  return saveAndPresent(project, user, company);
 }
 
 export async function addNote(company, user, id, body) {
   const project = await getOwn(company, id);
   addNoteTo(project, user, body);
-  return saveAndPresent(project, user);
+  return saveAndPresent(project, user, company);
 }
 
 export async function deleteProject(company, id) {
-  await (await getOwn(company, id)).deleteOne();
+  const project = await getOwn(company, id);
+  await project.deleteOne();
 }
 
 /* ───────────── agent ───────────── */
 
 async function getAssigned(user, id) {
-  const project = await Project.findOne({ _id: objectId(id, 'Installation'), company: user.company, 'steps.assignee': user._id });
+  const project = await Project.findOne({
+    _id: objectId(id, 'Installation'),
+    company: user.company,
+    $or: [{ 'steps.assignee': user._id }, { 'amcVisits.assignee': user._id }],
+  });
   if (!project) throw notFound('Installation');
   return project;
 }
@@ -382,11 +411,19 @@ export const assertAssigned = async (user, id) => (await getAssigned(user, id)).
 
 /** Installations where the agent holds at least one step. */
 export function listForAgent(user) {
-  return populate(Project.find({ company: user.company, 'steps.assignee': user._id }).select('-logs').sort({ updatedAt: -1 }), ROLES.AGENT);
+  return populate(
+    Project.find({
+      company: user.company,
+      $or: [{ 'steps.assignee': user._id }, { 'amcVisits.assignee': user._id }],
+    }).select('-logs').sort({ updatedAt: -1 }),
+    ROLES.AGENT,
+  );
 }
 
 export async function getForAgent(user, id) {
-  return populate(Project.findById((await getAssigned(user, id))._id), ROLES.AGENT);
+  const raw = await getAssigned(user, id);
+  await ensureProjectAmc(raw, { _id: user.company });
+  return populate(Project.findById(raw._id), ROLES.AGENT);
 }
 
 /** Agents move only their own steps. */
@@ -398,9 +435,159 @@ export async function setStatusAsAgent(user, id, stepId, body) {
   const wasDone = step.status === 'done';
   const change = setStepStatus(project, step, body?.status, user, body);
   if (!wasDone && step.status === 'done') await autoAssignStepAfter(project, step, company, user);
-  const saved = await saveAndPresent(project, user);
+  const saved = await saveAndPresent(project, user, { _id: user.company });
   announceStepChange(project, step, user, change);
   return saved;
+}
+
+function visitOf(project, visitId) {
+  const visit = project.amcVisits?.id(objectId(visitId, 'AMC visit'));
+  if (!visit) throw notFound('AMC visit');
+  return visit;
+}
+
+function applyAmcCompletion(visit, body, user) {
+  if (visit.status === 'completed') throw badRequest('This AMC visit is already completed');
+  const criteria = Array.isArray(body?.criteria) ? body.criteria : [];
+  for (const row of criteria) {
+    const item = visit.criteria.id(objectId(row.id, 'Criterion'));
+    if (!item) throw badRequest('Unknown checklist item');
+    if (row.checked !== undefined) item.checked = Boolean(row.checked);
+    if (row.note !== undefined) item.note = String(row.note || '').trim().slice(0, 300);
+  }
+  const unchecked = visit.criteria.filter((c) => !c.checked);
+  if (unchecked.length) throw badRequest(`Check all criteria before completing (${unchecked.length} remaining)`);
+  visit.status = 'completed';
+  visit.completedAt = new Date();
+  visit.completedBy = user._id;
+  visit.completedByName = user.name || user.email;
+  visit.completionNote = body?.note ? String(body.note).trim().slice(0, 1000) : '';
+}
+
+/** Emails the client, the company and the assigned staff member that a visit was completed. */
+function announceAmcCompleted(project, visit, user) {
+  notifyAmcCompleted({
+    companyId: String(project.company),
+    clientId: project.client ? String(project.client) : null,
+    projectId: String(project._id),
+    designId: project.design ? String(project.design) : null,
+    visitName: visit.name,
+    completedByName: visit.completedByName || user.name || user.email || '',
+    completionNote: visit.completionNote || '',
+    assigneeId: visit.assignee ? String(visit.assignee) : null,
+    actorId: String(user._id),
+    eventId: String(visit._id),
+  });
+}
+
+export async function completeAmcVisit(company, user, projectId, visitId, body) {
+  need(user, 'change_status', 'Complete AMC visits');
+  const project = await getOwn(company, projectId);
+  await ensureProjectAmc(project, company);
+  const visit = visitOf(project, visitId);
+  if (project.status !== 'completed' && visit.workflowStatus !== 'assigned') {
+    throw badRequest('Assign staff to this AMC visit first, or complete the installation.');
+  }
+  applyAmcCompletion(visit, body, user);
+  log(project, user, 'amc_completed', null, `${visit.name} — all criteria checked`);
+  visit.workflowStatus = 'completed';
+  await project.save();
+  await markAmcRequestCompleted(project.design, visit);
+  announceAmcCompleted(project, visit, user);
+  return populate(Project.findById(project._id), user.role);
+}
+
+export async function completeAmcVisitAsAgent(user, projectId, visitId, body) {
+  const project = await getAssigned(user, projectId);
+  await ensureProjectAmc(project, { _id: user.company });
+  const visit = visitOf(project, visitId);
+  if (!visit.assignee || String(visit.assignee) !== user.id) throw forbidden('This AMC visit is not assigned to you');
+  applyAmcCompletion(visit, body, user);
+  log(project, user, 'amc_completed', null, `${visit.name} — all criteria checked`);
+  visit.workflowStatus = 'completed';
+  await project.save();
+  await markAmcRequestCompleted(project.design, visit);
+  announceAmcCompleted(project, visit, user);
+  return populate(Project.findById(project._id), ROLES.AGENT);
+}
+
+/* ───────────── parts used on an AMC visit ───────────── */
+
+/** What the invoice PDF needs besides the invoice itself: the client it is addressed to and the proposal's name. */
+async function amcPartsInvoiceView(project, visit, invoice) {
+  const [client, design] = await Promise.all([
+    Client.findById(project.client).select('name email phone address gstNumber pan').lean(),
+    Design.findById(project.design).select('name').lean(),
+  ]);
+  return { invoice: toApiJSON(invoice.toObject ? invoice.toObject() : invoice), client: toApiJSON(client), design: toApiJSON(design), visit: { id: visit.id, name: visit.name, parts: visit.parts, partsInvoiceNo: visit.partsInvoiceNo } };
+}
+
+/** Bills the parts replaced on a visit to the client as one invoice on the proposal, and records it on the visit. */
+async function billAmcParts(company, user, project, visit, body) {
+  if (visit.partsInvoice) throw conflict(`The parts for this visit were already invoiced (${visit.partsInvoiceNo})`);
+  if (!project.design) throw badRequest('This installation has no proposal to invoice against');
+  const invoice = await billingService.createAmcPartsInvoice(company, user, { project, visit, lines: body.lines, withGst: body.withGst !== false });
+  visit.partsInvoice = invoice._id;
+  visit.partsInvoiceNo = invoice.invoiceNo;
+  visit.parts = (invoice.pricing?.lines || []).map((l) => ({ productName: l.name, qty: l.qty, unit: l.unit || '', rate: l.rate }));
+  const what = visit.parts.map((p) => `${p.qty} ${p.unit} ${p.productName}`.trim()).join(', ');
+  log(project, user, 'amc_parts_invoiced', null, [`${visit.name} — invoice ${invoice.invoiceNo}: ${what}`, body.note].filter(Boolean).join(' — '));
+  await project.save();
+  return amcPartsInvoiceView(project, visit, invoice);
+}
+
+export async function invoiceAmcParts(company, user, projectId, visitId, body) {
+  const project = await getOwn(company, projectId);
+  return billAmcParts(company, user, project, visitOf(project, visitId), body);
+}
+
+/** A visit of an installation the staff member works on, which is assigned to them (their side of AMC parts). */
+function assignedVisitOf(user, project, visitId) {
+  const visit = visitOf(project, visitId);
+  if (!visit.assignee || String(visit.assignee) !== user.id) throw forbidden('This AMC visit is not assigned to you');
+  return visit;
+}
+
+export async function invoiceAmcPartsAsAgent(user, projectId, visitId, body) {
+  const project = await getAssigned(user, projectId);
+  const visit = assignedVisitOf(user, project, visitId);
+  const company = await Company.findById(user.company);
+  return billAmcParts(company, user, project, visit, body);
+}
+
+/** The parts invoice of a visit, for viewing or downloading its PDF. */
+async function partsInvoiceOf(project, visitId) {
+  const visit = visitOf(project, visitId);
+  if (!visit.partsInvoice) throw notFound('Parts invoice');
+  const invoice = await Invoice.findById(visit.partsInvoice);
+  if (!invoice) throw notFound('Parts invoice');
+  return { visit, invoice };
+}
+
+export async function getAmcPartsInvoice(company, projectId, visitId) {
+  const project = await getOwn(company, projectId);
+  const { visit, invoice } = await partsInvoiceOf(project, visitId);
+  return amcPartsInvoiceView(project, visit, invoice);
+}
+
+export async function getAmcPartsInvoiceAsAgent(user, projectId, visitId) {
+  const project = await getAssigned(user, projectId);
+  assignedVisitOf(user, project, visitId);
+  const { visit, invoice } = await partsInvoiceOf(project, visitId);
+  return amcPartsInvoiceView(project, visit, invoice);
+}
+
+export async function attachAmcPartsInvoicePdf(company, projectId, visitId, pdfName) {
+  const project = await getOwn(company, projectId);
+  const { invoice } = await partsInvoiceOf(project, visitId);
+  return billingService.attachInvoicePdf(company, invoice.id, pdfName);
+}
+
+export async function attachAmcPartsInvoicePdfAsAgent(user, projectId, visitId, pdfName) {
+  const project = await getAssigned(user, projectId);
+  assignedVisitOf(user, project, visitId);
+  const { invoice } = await partsInvoiceOf(project, visitId);
+  return billingService.attachInvoicePdf({ _id: user.company }, invoice.id, pdfName);
 }
 
 export async function saveStepPhoto(company, user, id, stepId, file) {

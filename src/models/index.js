@@ -1,4 +1,5 @@
 export { AuthSession } from './authSession.model.js';
+export { Batch } from './batch.model.js';
 export { Category } from './category.model.js';
 export { ParentCategory } from './parentCategory.model.js';
 export { Plan } from './plan.model.js';
@@ -10,13 +11,19 @@ export { Design } from './design.model.js';
 export { DesignVersion } from './designVersion.model.js';
 export { Invoice } from './invoice.model.js';
 export { Payment } from './payment.model.js';
+export { Expense } from './expense.model.js';
+export { ProjectBudget } from './projectBudget.model.js';
+export { Loan } from './loan.model.js';
 export { InstallationCharge } from './installationCharge.model.js';
 export { Package } from './package.model.js';
 export { Product } from './product.model.js';
 export { Project } from './project.model.js';
 export { Role } from './role.model.js';
+export { SerialUnit } from './serialUnit.model.js';
+export { Supplier } from './supplier.model.js';
 export { User } from './user.model.js';
 
 export { Notification } from './notification.model.js';
+export { EmailLog } from './emailLog.model.js';
 export { Ticket } from './ticket.model.js';
 export { ClientTicket } from './clientTicket.model.js';

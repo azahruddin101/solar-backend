@@ -4,14 +4,22 @@ export const TENANT_ROLES = [ROLES.COMPANY, ROLES.AGENT, ROLES.CLIENT];
 export const COMPANY_STATUS = ['active', 'suspended'];
 export const PLANS = ['starter', 'growth', 'enterprise'];
 export const DESIGN_STATUS = ['draft', 'proposed', 'won', 'lost'];
-export const DESIGN_GRID_TYPES = ['on_grid', 'off_grid'];
+export const DESIGN_GRID_TYPES = ['on_grid', 'off_grid', 'hybrid'];
 /** Client portal response to a proposed design (stored on the design until cleared on re-proposal). */
 export const CLIENT_PROPOSAL_DECISION = ['accepted', 'rejected', 'changes_requested'];
 export const PAYMENT_MODES = ['cash', 'upi', 'bank_transfer', 'cheque', 'card', 'other'];
 export const CLIENT_PROJECT_TYPES = ['residential', 'industrial', 'commercial'];
 export const CLIENT_ROOF_TYPES = ['concrete', 'factory', 'tin_shed'];
 export const PROJECT_STATUS = ['active', 'completed'];
+/** Scheduled maintenance visit on an installation (from the company's AMC template). */
+export const AMC_VISIT_STATUS = ['pending', 'completed'];
+/** Client AMC booking: request → company assigns staff → field completion. */
+export const AMC_REQUEST_STATUS = ['requested', 'assigned', 'completed', 'cancelled'];
+/** A visit on the installation: free (included) visits are 'scheduled' automatically; paid packages follow the request flow. */
+export const AMC_VISIT_WORKFLOW = ['scheduled', ...AMC_REQUEST_STATUS];
 export const STEP_STATUS = ['pending', 'in_progress', 'done'];
+/** A client's loan: being processed, then approved/disbursed (completed) or rejected. Its steps use STEP_STATUS. */
+export const LOAN_STATUS = ['in_progress', 'completed', 'rejected'];
 // How urgent an installation step is. The company sets it per step; 'medium' unless it says otherwise.
 export const STEP_PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 export const DEFAULT_STEP_PRIORITY = 'medium';
@@ -20,6 +28,13 @@ export const STEP_STATUS_LABEL = { pending: 'Pending', in_progress: 'In progress
 // are picked up by the designer; 'general' products are catalog items (inverters, wire, earthing, ACDB, DCDB, etc.).
 export const PRODUCT_TYPES = ['general', 'panels', 'poles'];
 export const PILLAR_SHAPES = ['l-shape', 'cylindrical', 'square'];
+// Category attribute definitions (Category.attributes): what kind of value each one holds on a product.
+export const ATTRIBUTE_TYPES = ['text', 'number', 'select', 'boolean'];
+// A serialized product's physical units (SerialUnit.status) and the moves allowed between them.
+export const UNIT_STATUS = ['inStock', 'sold', 'installed', 'returned'];
+export const UNIT_TRANSITIONS = { inStock: ['sold', 'installed'], sold: ['installed', 'returned'], installed: ['returned'], returned: ['inStock'] };
+// Which batch price an invoice line is billed at (Batch.basePrice / wholesalePrice / retailPrice).
+export const PRICE_TYPES = ['base', 'wholesale', 'retail'];
 /** Default “per …” labels for catalog products; each company can change this list. */
 export const DEFAULT_PRODUCT_UNITS = ['Piece', 'Nos', 'Set', 'Metre', 'Foot', 'Kg', 'Box', 'Roll', 'Lot', 'Bundle'];
 /** Default job titles for field staff; each company can edit this list under Agent roles. */
@@ -70,6 +85,15 @@ export const DEFAULT_CATEGORIES = [
 export const DEFAULT_PARENT_CATEGORIES = [
   { name: 'Structures', description: 'Solar panels, poles and the mounting structure.', match: /panel|module|pole|pillar|mount|structure|rail|clamp/i },
   { name: 'Electricals', description: 'Inverters, cabling, protection and storage.', match: /inverter|wire|cabl|earth|acdb|dcdb|distribution|batter|storage|meter|mcb|mccb|spd|fuse|conduit|connector|lightning|electric/i },
+];
+
+// Suggested loan steps; each company edits its own list (Company.loanSteps).
+export const DEFAULT_LOAN_STEPS = [
+  { name: 'Documents collected', description: 'ID proof, address proof, income proof, electricity bill and bank statements.' },
+  { name: 'Application submitted', description: 'Loan application filed with the bank / lender.' },
+  { name: 'Verification', description: 'Lender verifies documents and the site.' },
+  { name: 'Loan sanctioned', description: 'Sanction letter received.' },
+  { name: 'Loan disbursed', description: 'Amount released to the company.' },
 ];
 
 // Suggested installation steps; each company edits its own list (Company.installationSteps).

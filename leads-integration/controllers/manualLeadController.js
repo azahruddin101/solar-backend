@@ -8,6 +8,7 @@ const { leadCompanyFilter, companyObjectId } = require('../utils/tenant');
 const { assignedScope } = require('../utils/leadScope');
 const { FIXED_KEYS, FIELD_TYPE_LABEL, formOf, cleanLeadValues, valueText } = require('../utils/leadForm');
 const { convertedStatusIds, pageConvertedLast } = require('../utils/convertedLast');
+const { assertLeadStatusMutable, assertLeadsAssignmentMutable } = require('../utils/leadStatusLock');
 const { applyLeadSearch } = require('../utils/leadSearch');
 
 // Leads added by hand ("Add lead") or imported from CSV / Excel, on the company's own lead form (Manage Masters →
@@ -171,6 +172,10 @@ const updateManualLeadStatus = async (req, res) => {
   try {
     const status = await MetaLeadStatus.findOne({ ...leadCompanyFilter(req.leadsCompanyId), _id: body.statusId, isActive: true, isDeleted: { $ne: true } }).lean();
     if (!status) return res.status(404).json({ message: 'Status not found' });
+    const existing = await ManualLead.findOne(scope(req, { _id: req.params.id, isDeleted: false })).select('convertedClient status').lean();
+    if (!existing) return res.status(404).json({ message: 'Lead not found' });
+    const lock = await assertLeadStatusMutable(req.leadsCompanyId, existing);
+    if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
     const now = new Date();
     const lead = await ManualLead.findOneAndUpdate(
       scope(req, { _id: req.params.id, isDeleted: false }),
@@ -199,9 +204,12 @@ const assignManualLeads = async (req, res) => {
   const assignee = targetId ? (req.leadsAssignee && String(req.leadsAssignee._id) === String(targetId) ? req.leadsAssignee : null) : null;
   if (targetId && !assignee) return res.status(404).json({ message: 'Staff member not found, inactive, or not allowed to work on leads' });
   try {
-    const leads = await ManualLead.find(scope(req, { _id: { $in: leadIds }, isDeleted: false })).select('_id assignedTo').lean();
+    const leads = await ManualLead.find(scope(req, { _id: { $in: leadIds }, isDeleted: false })).select('_id assignedTo convertedClient status').lean();
     const target = assignee ? String(assignee._id) : '';
-    const change = leads.filter((l) => String(l.assignedTo || '') !== target).map((l) => l._id);
+    const toChange = leads.filter((l) => String(l.assignedTo || '') !== target);
+    const lock = await assertLeadsAssignmentMutable(req.leadsCompanyId, toChange);
+    if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
+    const change = toChange.map((l) => l._id);
     if (change.length) {
       const where = { ...leadCompanyFilter(req.leadsCompanyId), _id: { $in: change } };
       if (assignee) await ManualLead.updateMany(where, { $set: { assignedTo: assignee._id, assignedAt: new Date() } });

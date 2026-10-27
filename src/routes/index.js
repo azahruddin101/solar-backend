@@ -9,6 +9,8 @@ import leadRoutes from './leads.routes.js';
 import authRoutes from './auth.routes.js';
 import { catalogRoutes, categoryRoutes, parentCategoryRoutes, productRoutes } from './catalog.routes.js';
 import clientRoutes from './client.routes.js';
+import loanRoutes from './loan.routes.js';
+import expenseRoutes from './expense.routes.js';
 import companyRoutes from './company.routes.js';
 import designRoutes from './design.routes.js';
 import { myProjectRoutes, projectRoutes } from './project.routes.js';
@@ -21,8 +23,11 @@ import publicRoutes from './public.routes.js';
 import portalRoutes from './portal.routes.js';
 import dashboardRoutes from './dashboard.routes.js';
 import billingRoutes from './billing.routes.js';
+import { stockRoutes, supplierRoutes } from './stock.routes.js';
 import installationChargeRoutes from './installationCharge.routes.js';
 import { solarRoutes, staticMapRoutes } from './google.routes.js';
+import { staffCounts } from '../services/dashboard.service.js';
+import { wrap } from '../utils/wrap.js';
 
 const router = Router();
 
@@ -36,11 +41,15 @@ router.use('/admin', superAdminOnly, adminRoutes);
 // (routes/company.routes.js is owner-only as a whole: company settings, masters and lead integrations)
 router.use('/company', authenticate, companyRoutes);
 router.use('/clients', withAreaAccess('clients'), clientRoutes);
+router.use('/expenses', withAreaAccess('expenses'), expenseRoutes); // what was spent on each proposal's project
+router.use('/loans', withAreaAccess('loans'), loanRoutes); // clients buying with a loan, and the company's loan step template
 router.use('/categories', withAreaAccess('proposals', 'inventory'), categoryRoutes); // read for the designer; writes need 'inventory' (see catalog.routes.js)
 router.use('/parent-categories', withAreaAccess('inventory'), parentCategoryRoutes);
-router.use('/products', withAreaAccess('proposals', 'inventory'), productRoutes); // same: read for the designer, writes need 'inventory'
+router.use('/products', withAreaAccess('proposals', 'inventory', 'finances', 'tasks'), productRoutes); // read for the designer, invoices and installations; writes need 'inventory'
 router.use('/packages', withAreaAccess('proposals', 'inventory'), packageRoutes); // list/get are read by the designer too; writes need 'inventory'
 router.use('/billing', withAreaAccess('finances'), billingRoutes);
+router.use('/stock', withAreaAccess('inventory', 'finances', 'tasks'), stockRoutes); // batches and serial units; writes need 'inventory'
+router.use('/suppliers', withAreaAccess('inventory', 'finances', 'tasks'), supplierRoutes);
 router.use('/dashboard', companyOnly, dashboardRoutes);
 router.use('/installation-charges', withAreaAccess('proposals', 'inventory'), installationChargeRoutes);
 router.use('/catalog', withAreaAccess('proposals', 'inventory'), catalogRoutes); // the designer's own read-only aggregated catalog, also used by the catalog management page
@@ -68,6 +77,7 @@ router.use('/client-tickets', withAreaAccess('helpdesk'), rateLimit({ name: 'cli
 
 // agent workspace: the steps assigned to the signed-in agent
 router.use('/my/projects', agentOnly, myProjectRoutes);
+router.get('/my/counts', agentOnly, wrap((req) => staffCounts(req.user, req.company))); // the staff sidebar's numbers, for the areas they may view
 
 // client portal: a client's proposals and responses on open proposals
 router.use('/portal', clientOnly, portalRoutes);

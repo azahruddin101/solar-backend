@@ -54,10 +54,14 @@ test('passwords: strength only when setting one', () => {
 
 test('catalog, package and step numbers', () => {
   const cat = '6ab374ab18ebe1ef7c07dfe9';
-  bad(S.productSchema, { category: cat, price: -1 }, 'price');
   bad(S.productSchema, { category: cat, watts: 5000 }, 'watts');
   bad(S.productSchema, { category: cat, hsnCode: '12' }, 'hsnCode');
-  ok(S.productSchema, { category: cat, hsnCode: '85414011', price: '1200.50', watts: 540 });
+  ok(S.productSchema, { category: cat, hsnCode: '85414011', watts: 540, warrantyMonths: 300, isSerialized: true });
+  // prices live on stock receipts (batches): all three selling prices required, none negative
+  const receipt = { supplier: cat, qtyReceived: 10, basePrice: 90, wholesalePrice: 95, retailPrice: '100' };
+  ok(S.stockReceiveSchema, receipt);
+  bad(S.stockReceiveSchema, { ...receipt, wholesalePrice: -1 }, 'wholesalePrice');
+  for (const k of ['basePrice', 'wholesalePrice', 'retailPrice']) bad(S.stockReceiveSchema, { ...receipt, [k]: undefined }, k);
   bad(S.packageSchema, { name: 'P', price: 'abc' }, 'price');
   bad(S.stepUpdateSchema, { status: 'finished' }, 'status');
   bad(S.agentStepStatusSchema, { status: 'done', lat: 200, lng: 10 }, 'lat');

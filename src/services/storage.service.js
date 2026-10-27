@@ -63,12 +63,38 @@ export async function deleteByPrefix(prefix) {
 }
 
 /** { stream, contentType, contentLength, etag, lastModified } or null when the file does not exist. */
-export async function openFile(name) {
+const SINGLE_RANGE = /^bytes=(\d*)-(\d*)$/;
+
+/** The byte span a `Range: bytes=…` header asks for in a file of `size` bytes; null for none/several, false if it can't be met. */
+function byteSpan(header, size) {
+  const m = SINGLE_RANGE.exec(String(header || '').trim());
+  if (!m || (m[1] === '' && m[2] === '')) return null; // no range, or several (served whole)
+  let start;
+  let end;
+  if (m[1] === '') {
+    start = Math.max(0, size - Number(m[2])); // bytes=-N: the last N bytes
+    end = size - 1;
+  } else {
+    start = Number(m[1]);
+    end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1);
+  }
+  return start > end || start >= size ? false : { start, end };
+}
+
+/**
+ * A readable stream of a stored file, or null if there is none. With `range` (the request's Range header) only that part
+ * is read (`partial` with `contentRange` set), so a PDF viewer can show the first pages before the rest has arrived;
+ * `unsatisfiable` when the range lies outside the file.
+ */
+export async function openFile(name, { range } = {}) {
   if (usingS3()) {
+    const ranged = SINGLE_RANGE.test(String(range || '').trim()) && range.trim() !== 'bytes=-';
     try {
-      const obj = await s3().send(new GetObjectCommand({ Bucket: env.s3.bucket, Key: keyOf(name) }));
-      return { stream: obj.Body, contentType: obj.ContentType, contentLength: obj.ContentLength, etag: obj.ETag, lastModified: obj.LastModified };
+      const obj = await s3().send(new GetObjectCommand({ Bucket: env.s3.bucket, Key: keyOf(name), ...(ranged && { Range: range.trim() }) }));
+      const partial = Boolean(obj.ContentRange);
+      return { stream: obj.Body, contentType: obj.ContentType, contentLength: obj.ContentLength, etag: obj.ETag, lastModified: obj.LastModified, partial, contentRange: obj.ContentRange };
     } catch (e) {
+      if (e?.name === 'InvalidRange' || e?.$metadata?.httpStatusCode === 416) return { unsatisfiable: true, contentRange: 'bytes */*' };
       if (!missing(e)) throw e;
       // fall through: a file uploaded before the move to S3 may still be on disk
     }
@@ -76,7 +102,14 @@ export async function openFile(name) {
   try {
     const stat = await fs.stat(localPath(name));
     if (!stat.isFile()) return null;
-    return { stream: createReadStream(localPath(name)), contentType: null, contentLength: stat.size, etag: `"${stat.size}-${Math.floor(stat.mtimeMs)}"`, lastModified: stat.mtime };
+    const meta = { contentType: null, etag: `"${stat.size}-${Math.floor(stat.mtimeMs)}"`, lastModified: stat.mtime };
+    const span = byteSpan(range, stat.size);
+    if (span === false) return { ...meta, unsatisfiable: true, contentRange: `bytes */${stat.size}` };
+    if (span) {
+      const { start, end } = span;
+      return { ...meta, stream: createReadStream(localPath(name), { start, end }), contentLength: end - start + 1, partial: true, contentRange: `bytes ${start}-${end}/${stat.size}` };
+    }
+    return { ...meta, stream: createReadStream(localPath(name)), contentLength: stat.size };
   } catch (e) {
     if (missing(e)) return null;
     throw e;

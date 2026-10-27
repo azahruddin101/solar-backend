@@ -14,6 +14,7 @@ const { detailFields, sourceLabelFor } = require('./inboxLeadController');
 const { readPriorityFilter, priorityCondition } = require('../utils/leadPriority');
 const { companyObjectId, leadCompanyFilter } = require('../utils/tenant');
 const { assignedScope } = require('../utils/leadScope');
+const { assertLeadStatusMutable, assertLeadsAssignmentMutable } = require('../utils/leadStatusLock');
 
 // Every query on leads, assignments, statuses and users in this file is scoped to the signed-in company.
 const tenantFilter = (req, extra = {}) => ({ ...leadCompanyFilter(req.leadsCompanyId), ...extra });
@@ -316,12 +317,25 @@ const assignMetaLeads = async (req, res) => {
     const leads = await MetaLead.find(
       tenantFilter(req, { _id: { $in: leadIds }, processingStatus: 'processed', isDeleted: false, ...assignedScope(req) })
     )
-      .select('_id assignedTo')
+      .select('_id assignedTo convertedClient adminStatus')
       .lean();
 
     // Leads that already belong to the requested telecaller are left as they are
     const targetId = telecaller ? String(telecaller._id) : '';
-    const changeIds = leads.filter((lead) => String(lead.assignedTo || '') !== targetId).map((lead) => lead._id);
+    const toChange = leads.filter((lead) => String(lead.assignedTo || '') !== targetId);
+    const changeIds = toChange.map((lead) => lead._id);
+    if (changeIds.length) {
+      const assignments = await MetaLeadAssignment.find(tenantFilter(req, { lead: { $in: changeIds }, isActive: true }))
+        .select('lead currentStatus')
+        .lean();
+      const statusByLead = new Map(assignments.map((a) => [String(a.lead), a.currentStatus]));
+      const lock = await assertLeadsAssignmentMutable(req.leadsCompanyId, toChange, (lead) => ({
+        convertedClient: lead.convertedClient,
+        adminStatus: lead.adminStatus,
+        currentStatus: statusByLead.get(String(lead._id)),
+      }));
+      if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
+    }
     const now = new Date();
 
     if (changeIds.length > 0) {
@@ -929,8 +943,20 @@ const updateMetaLeadStatus = async (req, res) => {
     const status = await MetaLeadStatus.findOne(tenantFilter(req, { _id: body.statusId, isActive: true, isDeleted: false }));
     if (!status) return res.status(400).json({ message: 'This status is no longer available' });
 
-    const lead = await MetaLead.exists(tenantFilter(req, { _id: req.params.id, isDeleted: { $ne: true }, ...assignedScope(req) }));
-    if (!lead) return res.status(404).json({ message: 'Lead not found' });
+    const metaLead = await MetaLead.findOne(tenantFilter(req, { _id: req.params.id, isDeleted: { $ne: true }, ...assignedScope(req) }))
+      .select('convertedClient adminStatus')
+      .lean();
+    if (!metaLead) return res.status(404).json({ message: 'Lead not found' });
+
+    const assignmentPeek = await MetaLeadAssignment.findOne(tenantFilter(req, { lead: req.params.id, isActive: true }))
+      .select('currentStatus')
+      .lean();
+    const lock = await assertLeadStatusMutable(req.leadsCompanyId, {
+      convertedClient: metaLead.convertedClient,
+      adminStatus: metaLead.adminStatus,
+      currentStatus: assignmentPeek?.currentStatus,
+    });
+    if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
 
     const now = new Date();
     const historyEntry = {
@@ -1020,7 +1046,7 @@ const updateMyMetaLeadStatus = async (req, res) => {
       _id: req.params.id,
       telecaller: req.user._id,
       isActive: true,
-    })).select('lead source');
+    })).select('lead source currentStatus');
     if (!owned) {
       const reassigned = await MetaLeadAssignment.exists(tenantFilter(req, { _id: req.params.id, telecaller: req.user._id }));
       if (reassigned) {
@@ -1030,6 +1056,13 @@ const updateMyMetaLeadStatus = async (req, res) => {
       }
       return res.status(404).json({ message: 'Lead not found' });
     }
+
+    const metaLead = await MetaLead.findOne(tenantFilter(req, { _id: owned.lead })).select('convertedClient').lean();
+    const lock = await assertLeadStatusMutable(req.leadsCompanyId, {
+      convertedClient: metaLead?.convertedClient,
+      currentStatus: owned.currentStatus,
+    });
+    if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
 
     let registrationLead = null;
     const ownedSource = owned.source || 'META';

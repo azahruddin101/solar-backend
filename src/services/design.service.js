@@ -1,5 +1,6 @@
 // Designs a company creates for its clients. `data` is the designer's saved state.
 import crypto from 'node:crypto';
+import mongoose from 'mongoose';
 import { CLIENT_PROJECT_TYPES, CLIENT_ROOF_TYPES, DESIGN_GRID_TYPES } from '../constants/index.js';
 import { Client, Design, DesignVersion, Invoice, Payment } from '../models/index.js';
 import { badRequest, forbidden, notFound } from '../utils/HttpError.js';
@@ -8,8 +9,11 @@ import { objectId } from '../utils/validators.js';
 import { hasPermission } from '../middlewares/auth.middleware.js';
 import { totalOf } from './billing.service.js';
 import { deleteProjectsOf, moveDesignProject } from './project.service.js';
+import { deleteForDesign as deleteExpensesOfDesign } from './expense.service.js';
+import { closeLoanForDesign, deleteLoanOfDesign, moveLoanOfDesign, openLoanForDesign } from './loan.service.js';
 import { deleteFile } from './storage.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
+import { dateRangeOnField } from '../utils/listFilters.js';
 
 const SUMMARY = ['address', 'kwp', 'panels', 'cost', 'annualKwh', 'pricing'];
 const DESIGN_SAVE_LOG_GAP_MS = 10 * 60 * 1000;
@@ -57,16 +61,36 @@ async function checkLimit(company) {
   };
 }
 
-/** Lists leave out the heavy `data`. Paginated: pass `page`/`limit` (defaults to a single bounded page). */
-export async function listDesigns(company, { client, page, limit } = {}) {
-  const filter = { company: company._id };
-  if (client) filter.client = objectId(client, 'Client');
+/** Lists leave out the heavy `data`. Optional `from`/`to` (`YYYY-MM-DD`) filter on `createdAt`. */
+export async function listDesigns(company, { client, page, limit, from, to } = {}) {
+  const match = { company: company._id };
+  if (client) match.client = new mongoose.Types.ObjectId(objectId(client, 'Client'));
+  Object.assign(match, dateRangeOnField('createdAt', from, to) || {});
   const { page: p, limit: l, skip } = parsePagination({ page, limit });
-  const [items, total] = await Promise.all([
-    Design.find(filter).select('-data').populate('client', 'name email').sort({ updatedAt: -1 }).skip(skip).limit(l).lean(),
-    Design.countDocuments(filter),
+  const [facet] = await Design.aggregate([
+    { $match: match },
+    { $sort: { updatedAt: -1 } },
+    {
+      $lookup: {
+        from: 'clients',
+        localField: 'client',
+        foreignField: '_id',
+        as: 'client',
+        pipeline: [{ $project: { name: 1, email: 1 } }],
+      },
+    },
+    { $unwind: { path: '$client', preserveNullAndEmptyArrays: true } },
+    { $project: { data: 0 } },
+    {
+      $facet: {
+        meta: [{ $count: 'total' }],
+        rows: [{ $skip: skip }, { $limit: l }],
+      },
+    },
   ]);
-  return { items: toApiJSONList(items), total, page: p, limit: l };
+  const total = facet?.meta?.[0]?.total ?? 0;
+  const items = toApiJSONList(facet?.rows ?? []);
+  return { items, total, page: p, limit: l };
 }
 
 /** Billing/servicing details on a proposal: billing name, loan needed, grid type, and cleaning terms. Only fields present in `body` are returned, so partial updates stay partial. */
@@ -183,6 +207,7 @@ export async function createDesign(company, user, body) {
   await afterInsert(design);
   appendLog(design, user, 'design_created', name);
   await design.save();
+  if (design.loanRequired) await openLoanForDesign(company, design, user);
   return design.populate('client');
 }
 
@@ -217,12 +242,15 @@ export async function updateDesign(company, user, id, body) {
   await assertBookedDealUnchanged(company, design, body || {});
   const prevStatus = design.status;
   const prevName = design.name;
+  const hadLoan = design.loanRequired;
   Object.assign(design, pick(body, ['name', 'status']));
   Object.assign(design, cleanBillingExtras(body));
+  if (hadLoan && !design.loanRequired) await closeLoanForDesign(company, design); // refuses once the loan is being processed
   if (body?.validUntil !== undefined) design.validUntil = parseValidUntil(body.validUntil);
   if (body?.client !== undefined) {
     design.client = (await ownClient(company, body.client))._id;
     await moveDesignProject(design);
+    await moveLoanOfDesign(design);
     appendLog(design, user, 'design_client_changed', 'Client updated');
   }
   if (body?.status !== undefined && body.status !== prevStatus) {
@@ -247,6 +275,7 @@ export async function updateDesign(company, user, id, body) {
     if (body?.data === undefined && shouldLogDesignSave(design)) appendLog(design, user, 'design_updated', 'Design summary updated');
   }
   await design.save();
+  if (!hadLoan && design.loanRequired) await openLoanForDesign(company, design, user);
   // the designer autosaves often — don't echo the whole document back
   return { id: design.id, name: design.name, status: design.status, validUntil: design.validUntil, updatedAt: design.updatedAt, clientResponse: design.clientResponse, clientReviewInvite: design.clientReviewInvite, billingName: design.billingName, loanRequired: design.loanRequired, gridType: design.gridType, cleaningFrequency: design.cleaningFrequency, cleaningCharge: design.cleaningCharge };
 }
@@ -295,6 +324,8 @@ export async function deleteDesign(company, id) {
   const design = await getDesign(company, id);
   if (await isBilled(company, design)) throw badRequest('This proposal has receipts or an invoice, so it cannot be deleted');
   await deleteProjectsOf({ design: design._id });
+  await deleteLoanOfDesign(design._id);
+  await deleteExpensesOfDesign(design._id);
   const versions = await DesignVersion.find({ design: design._id }).select('pdfName');
   await Promise.all(versions.map((v) => deleteFile(v.pdfName)));
   await DesignVersion.deleteMany({ design: design._id });

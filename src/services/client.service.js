@@ -11,8 +11,28 @@ import { email as validEmail, objectId } from '../utils/validators.js';
 import { deleteProjectsOf } from './project.service.js';
 import { revokeUserSessions } from './session.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
+import { dateRangeOnField, escapeRe } from '../utils/listFilters.js';
 
 const FIELDS = ['name', 'phone', 'pan', 'gstNumber', 'projectType', 'roofType', 'address', 'notes', 'consumerNumber', 'source'];
+
+function clientListMatch(company, { q, from, to } = {}) {
+  const match = { company: company._id };
+  Object.assign(match, dateRangeOnField('createdAt', from, to) || {});
+  const term = String(q ?? '').trim().slice(0, 100);
+  if (term) {
+    const re = escapeRe(term);
+    match.$or = [
+      { name: { $regex: re, $options: 'i' } },
+      { email: { $regex: re, $options: 'i' } },
+      { phone: { $regex: re, $options: 'i' } },
+      { address: { $regex: re, $options: 'i' } },
+      { consumerNumber: { $regex: re, $options: 'i' } },
+      { source: { $regex: re, $options: 'i' } },
+      { 'referredBy.name': { $regex: re, $options: 'i' } },
+    ];
+  }
+  return match;
+}
 
 function sanitizeClientInput(body) {
   const data = pick(body, FIELDS);
@@ -94,17 +114,27 @@ async function clientsWithLogin(company, clientId = null) {
   return new Set(users.map((u) => String(u.client)));
 }
 
-/** Paginated: pass `page`/`limit` (defaults to a single bounded page). */
-export async function listClients(company, { page, limit } = {}) {
-  const filter = { company: company._id };
+/** Paginated list; optional `q`, `from`/`to` (`YYYY-MM-DD`) filter by created date and search fields. */
+export async function listClients(company, { page, limit, q, from, to } = {}) {
   const { page: p, limit: l, skip } = parsePagination({ page, limit });
-  const [clients, total] = await Promise.all([
-    Client.find(filter).sort({ createdAt: -1 }).skip(skip).limit(l).lean(),
-    Client.countDocuments(filter),
+  const match = clientListMatch(company, { q, from, to });
+  const [facet] = await Client.aggregate([
+    { $match: match },
+    { $sort: { createdAt: -1 } },
+    {
+      $facet: {
+        meta: [{ $count: 'total' }],
+        rows: [{ $skip: skip }, { $limit: l }],
+      },
+    },
   ]);
+  const total = facet?.meta?.[0]?.total ?? 0;
+  const clients = facet?.rows ?? [];
   const ids = clients.map((c) => c._id);
   const [counts, logins] = await Promise.all([
-    Design.aggregate([{ $match: { company: company._id, client: { $in: ids } } }, { $group: { _id: '$client', n: { $sum: 1 } } }]),
+    ids.length
+      ? Design.aggregate([{ $match: { company: company._id, client: { $in: ids } } }, { $group: { _id: '$client', n: { $sum: 1 } } }])
+      : [],
     clientsWithLogin(company),
   ]);
   const designs = new Map(counts.map((c) => [String(c._id), c.n]));

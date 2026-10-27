@@ -7,6 +7,7 @@ import { enforceTenantCatalogIsolation } from './migrations/tenantCatalog.migrat
 import { ensureSessionTtlIndex } from './migrations/authSessionTtl.migration.js';
 import { capUnlimitedLimits } from './migrations/limits.migration.js';
 import { fixShareTokenIndex } from './migrations/shareToken.migration.js';
+import { migrateLoans } from './migrations/loan.migration.js';
 import { migrateParentCategories } from './migrations/parentCategory.migration.js';
 import { migratePlanRequests } from './migrations/planRequest.migration.js';
 import { capitalizeClientNames, capitalizeProductNames, capitalizeProductUnits } from './migrations/unitCase.migration.js';
@@ -17,6 +18,7 @@ import { ensureDefaultPlans } from './seeders/plans.seeder.js';
 import { ensureSuperAdmin } from './seeders/superAdmin.seeder.js';
 import { logger } from './utils/logger.js';
 import { startLeadIntegrationWorkers } from './integrations/leads.js';
+import { startAmcReminderWorker } from './services/amc.service.js';
 
 process.on('unhandledRejection', (err) => {
   logger.error('unhandledRejection', { err: err?.message || String(err) });
@@ -32,6 +34,9 @@ process.on('uncaughtException', (err) => {
 try {
   const db = await connectDb();
   logger.info('MongoDB connected', { db: db.name });
+  // selling, invoicing and issuing stock run in transactions, which a standalone mongod doesn't support
+  const hello = await db.db.admin().command({ hello: 1 });
+  if (!hello.setName && hello.msg !== 'isdbgrid') logger.warn('MongoDB is not a replica set: stock sales and invoices will fail. See MONGODB_URI in .env.example.');
 } catch (e) {
   logger.error('Could not connect to MongoDB', {
     uri: redactMongoUri(env.mongoUri),
@@ -48,6 +53,7 @@ await capitalizeClientNames();
 await migrateParentCategories();
 await migratePlanRequests();
 await fixShareTokenIndex();
+await migrateLoans();
 await capUnlimitedLimits();
 await ensureSessionTtlIndex();
 await migrateStaffPermissions();
@@ -57,4 +63,5 @@ await ensureDefaultPlans();
 await AuthSession.deleteMany({ $or: [{ expiresAt: null }, { expiresAt: { $exists: false } }] });
 await ensureSuperAdmin();
 startLeadIntegrationWorkers();
+startAmcReminderWorker();
 app.listen(env.port, () => logger.info('API listening', { url: `http://localhost:${env.port}`, origins: env.corsOrigins.join(',') }));

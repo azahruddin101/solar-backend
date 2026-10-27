@@ -1,7 +1,7 @@
 // Companies: the super admin's management operations and the company's own profile.
 import mongoose from 'mongoose';
 import { DEFAULT_AGENT_ROLES, DEFAULT_STEP_PRIORITY, ROLES, STEP_PRIORITIES } from '../constants/index.js';
-import { Category, Client, Company, Design, ParentCategory, Invoice, InstallationCharge, Payment, Counter, Package, Plan, Product, Project, User } from '../models/index.js';
+import { Batch, Category, Client, Company, Design, ParentCategory, Invoice, InstallationCharge, Payment, Counter, Package, Plan, Product, Project, SerialUnit, Supplier, User } from '../models/index.js';
 import { applyPlanLimitsToCompany, planSummary } from './plan.service.js';
 import { parseInvoiceNumbering } from './invoiceNumber.service.js';
 import { assignPlanAsAdmin, ensureCompanySubscription, subscriptionView } from './subscription.service.js';
@@ -208,6 +208,9 @@ export async function deleteCompany(id) {
     Design.deleteMany(filter),
     Client.deleteMany(filter),
     Product.deleteMany(filter),
+    Batch.deleteMany(filter),
+    SerialUnit.deleteMany(filter),
+    Supplier.deleteMany(filter),
     Category.deleteMany(filter),
     ParentCategory.deleteMany(filter),
     Package.deleteMany(filter),
@@ -263,6 +266,8 @@ export function stepPriority(value) {
   if (!STEP_PRIORITIES.includes(value)) throw badRequest('Invalid step priority');
   return value;
 }
+
+export { updateAmcTemplates } from './amc.service.js';
 
 /** The installation step template. Replaced as a whole; running installations keep the steps they started with. */
 export async function updateInstallationSteps(company, body) {

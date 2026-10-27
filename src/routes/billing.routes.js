@@ -12,9 +12,12 @@ const invoice = permissionOnly('finances', 'create_invoice');
 const receipt = permissionOnly('finances', 'create_receipt');
 const removeReceipt = permissionOnly('finances', 'remove_receipt');
 
-router.get('/overview', view, wrap((req) => svc.overview(req.company)));
-router.get('/payments', view, wrap((req) => svc.listPayments(req.company, { page: req.query.page, limit: req.query.limit })));
-router.get('/invoices', view, wrap((req) => svc.listInvoices(req.company, { page: req.query.page, limit: req.query.limit })));
+const dates = (req) => ({ from: req.query.from, to: req.query.to });
+
+router.get('/overview', view, wrap((req) => svc.overview(req.company, dates(req))));
+router.get('/payments', view, wrap((req) => svc.listPayments(req.company, { page: req.query.page, limit: req.query.limit, ...dates(req) })));
+router.post('/payments/direct', receipt, validate(S.directReceiptSchema), wrap((req) => svc.createDirectReceipt(req.company, req.user, req.body), 201));
+router.get('/invoices', view, wrap((req) => svc.listInvoices(req.company, { page: req.query.page, limit: req.query.limit, ...dates(req) })));
 router.get('/invoices/next-number', invoice, wrap((req) => svc.nextInvoiceNumber(req.company)));
 router.post('/invoices', invoice, validate(S.directInvoiceSchema), wrap((req) => svc.createDirectInvoice(req.company, req.user, req.body), 201));
 router.get('/designs/:id', view, wrap((req) => svc.get(req.company, req.params.id)));

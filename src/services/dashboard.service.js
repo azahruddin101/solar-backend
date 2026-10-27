@@ -1,9 +1,13 @@
 // The company dashboard: sales pipeline, money collected and what needs attention — one company-scoped read.
 import { DEFAULT_PRODUCT_UNITS, ROLES } from '../constants/index.js';
-import { Category, Client, Design, InstallationCharge, Invoice, Package, Payment, Product, Project, User } from '../models/index.js';
+import { Category, Client, Design, InstallationCharge, Invoice, Loan, Package, Payment, Product, Project, Supplier, Ticket, User } from '../models/index.js';
 import { billingService, totalOf } from './billing.service.js';
 import { agentRolesList } from './company.service.js';
+import { amcTrackerCount } from './amc.service.js';
+import { clientTicketOpenCountForCompany } from './clientTicket.service.js';
 import { leadModels } from '../integrations/leads.js';
+import { hasPermission } from '../middlewares/auth.middleware.js';
+import { projectCount as expenseProjectCount } from './expense.service.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const round = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -118,9 +122,12 @@ export async function dashboard(company) {
 }
 
 /** The numbers shown beside the sidebar links: how many of each thing the company has. `billing` is the count that needs action. */
+/** The company's tickets with the platform team that are still open or in progress (as for client support). */
+const openPlatformTickets = (company) => Ticket.countDocuments({ company: company._id, status: { $in: ['open', 'in_progress'] } });
+
 export async function counts(company) {
   const filter = { company: company._id };
-  const [clients, designs, packages, installations, team, installationCharges, products, categories, overview, metaLeads, googleLeads, manualLeads] = await Promise.all([
+  const [clients, designs, packages, installations, team, installationCharges, products, categories, overview, metaLeads, googleLeads, manualLeads, amc, clientSupport, loans, expenses, suppliers, support] = await Promise.all([
     Client.countDocuments(filter),
     Design.countDocuments(filter),
     Package.countDocuments(filter),
@@ -134,16 +141,30 @@ export async function counts(company) {
     leadModels.meta.countDocuments({ ...filter, isDeleted: false, processingStatus: 'processed' }),
     leadModels.google.countDocuments({ ...filter, isDeleted: false }),
     leadModels.manual.countDocuments({ ...filter, isDeleted: false }),
+    amcTrackerCount(company),
+    clientTicketOpenCountForCompany(company._id),
+    Loan.countDocuments({ ...filter, status: 'in_progress' }),
+    expenseProjectCount(company),
+    Supplier.countDocuments(filter),
+    openPlatformTickets(company),
   ]);
   return {
     clients,
+    loans,
+    expenses,
+    suppliers,
+    support, // the company's open tickets with the platform team
     designs,
     billing: overview.filter((d) => d.total > 0 && d.balance > 0.001).length, // won proposals with money still to collect
     packages,
     installations,
+    amc,
+    clientSupport,
     team,
     agentRoles: agentRolesList(company).length,
     installationSteps: company.installationSteps?.length || 0,
+    amcTemplates: company.amcTemplates?.length || 0,
+    loanSteps: company.loanSteps?.length || 0,
     installationCharges,
     products,
     categories,
@@ -153,4 +174,49 @@ export async function counts(company) {
     googleLeads,
     manualLeads,
   };
+}
+
+/**
+ * The staff sidebar's numbers: only the areas this staff member may view, each counted the way their list shows it —
+ * leads assigned to them unless they may view all, and their own open tasks and AMC visits. Permissions are the ones
+ * resolved for this request, so a role change shows in the next refresh.
+ */
+export async function staffCounts(user, company) {
+  const filter = { company: company._id };
+  const may = (area) => hasPermission(user, area, 'view');
+  const me = user._id;
+  const jobs = {
+    // installations with a step of theirs still to do (My tasks), and their unfinished AMC visits
+    myTasks: () => Project.countDocuments({ ...filter, steps: { $elemMatch: { assignee: me, status: { $ne: 'done' } } } }),
+    amc: async () => (await Project.aggregate([
+      { $match: { ...filter, 'amcVisits.assignee': me } },
+      { $unwind: '$amcVisits' },
+      { $match: { 'amcVisits.assignee': me, 'amcVisits.status': { $ne: 'completed' }, 'amcVisits.workflowStatus': { $ne: 'cancelled' } } },
+      { $count: 'n' },
+    ]))[0]?.n || 0,
+  };
+  if (may('leads')) {
+    const own = hasPermission(user, 'leads', 'view_all') ? {} : { assignedTo: me }; // as the lead lists scope them
+    jobs.metaLeads = () => leadModels.meta.countDocuments({ ...filter, ...own, isDeleted: false, processingStatus: 'processed' });
+    jobs.googleLeads = () => leadModels.google.countDocuments({ ...filter, ...own, isDeleted: false });
+    jobs.manualLeads = () => leadModels.manual.countDocuments({ ...filter, ...own, isDeleted: false });
+  }
+  if (may('clients')) jobs.clients = () => Client.countDocuments(filter);
+  if (may('proposals')) jobs.designs = () => Design.countDocuments(filter);
+  if (may('loans')) jobs.loans = () => Loan.countDocuments({ ...filter, status: 'in_progress' });
+  if (may('expenses')) jobs.expenses = () => expenseProjectCount(company);
+  if (may('finances')) jobs.billing = async () => (await billingService.overview(company)).filter((d) => d.total > 0 && d.balance > 0.001).length;
+  if (may('tasks')) jobs.installations = () => Project.countDocuments({ ...filter, status: 'active' });
+  if (may('helpdesk')) jobs.clientSupport = () => clientTicketOpenCountForCompany(company._id);
+  if (may('support')) jobs.support = () => openPlatformTickets(company);
+  if (may('inventory')) {
+    jobs.packages = () => Package.countDocuments(filter);
+    jobs.products = () => Product.countDocuments(filter);
+    jobs.suppliers = () => Supplier.countDocuments(filter); // the Suppliers page is part of Inventory
+  }
+  const keys = Object.keys(jobs);
+  const values = await Promise.all(keys.map((k) => jobs[k]()));
+  const out = Object.fromEntries(keys.map((k, i) => [k, values[i]]));
+  if (may('leads')) out.leads = out.metaLeads + out.googleLeads + out.manualLeads;
+  return out;
 }

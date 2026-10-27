@@ -20,7 +20,7 @@ try {
   if (fresh) {
     if (process.env.NODE_ENV === 'production') throw new Error('Refusing to wipe a production database (NODE_ENV=production).');
     await db.dropDatabase();
-    for (const file of await fs.readdir(env.uploadDir).catch(() => [])) if (file !== '.gitkeep') await fs.rm(path.join(env.uploadDir, file), { force: true });
+    for (const file of await fs.readdir(env.uploadDir).catch(() => [])) if (file !== '.gitkeep') await fs.rm(path.join(env.uploadDir, file), { force: true, recursive: true }); // incl. uploads/reports
     console.log('Database and uploads wiped.');
   }
 

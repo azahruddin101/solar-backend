@@ -13,11 +13,27 @@ function lineGstPercent(line, fallback = 18) {
   return Math.max(0, Math.min(100, pct));
 }
 
+/**
+ * What a stock line (stock.service.js allocateInvoiceLines) keeps: copies of the product, batch, serials and the price
+ * type it was billed at — values, so a later batch edit never changes an issued invoice.
+ */
+function stockFields(l) {
+  if (!l.productId) return {};
+  return {
+    productId: String(l.productId),
+    batch: l.batch ? String(l.batch) : '',
+    batchNo: String(l.batchNo || '').slice(0, 60),
+    serials: Array.isArray(l.serials) ? l.serials.map(String) : [],
+    priceType: l.priceType,
+  };
+}
+
 function normalizeLine(l) {
   const qty = Math.max(0, n(l.qty) || 1);
   const rate = round2(l.rate);
   const amount = round2(qty * rate);
   return {
+    ...stockFields(l),
     name: String(l.name || '').trim().slice(0, 160),
     detail: String(l.detail || '').slice(0, 300),
     hsn: String(l.hsn || l.hsnCode || '').slice(0, 20),

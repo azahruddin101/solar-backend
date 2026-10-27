@@ -9,6 +9,7 @@ const { resolveWebhookKey, resolveWebhookKeyFromPayload } = require('../services
 const { leadCompanyFilter } = require('../utils/tenant');
 const { assignedScope } = require('../utils/leadScope');
 const { convertedStatusIds, pageConvertedLast } = require('../utils/convertedLast');
+const { assertLeadStatusMutable, assertLeadsAssignmentMutable } = require('../utils/leadStatusLock');
 const { applyLeadSearch } = require('../utils/leadSearch');
 
 // Google Ads lead form extensions with a webhook. Leads are kept in their own collection
@@ -243,9 +244,12 @@ const assignGoogleLeads = async (req, res) => {
       ...assignedScope(req),
       _id: { $in: leadIds },
       isDeleted: false,
-    }).select('_id assignedTo').lean();
+    }).select('_id assignedTo convertedClient status').lean();
     const targetId = counsellor ? String(counsellor._id) : '';
-    const changeIds = leads.filter((lead) => String(lead.assignedTo || '') !== targetId).map((lead) => lead._id);
+    const toChange = leads.filter((lead) => String(lead.assignedTo || '') !== targetId);
+    const lock = await assertLeadsAssignmentMutable(req.leadsCompanyId, toChange);
+    if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
+    const changeIds = toChange.map((lead) => lead._id);
 
     if (changeIds.length > 0) {
       if (counsellor) {
@@ -287,6 +291,16 @@ const updateGoogleLeadStatus = async (req, res) => {
   try {
     const status = await MetaLeadStatus.findOne({ ...leadCompanyFilter(req.leadsCompanyId), _id: body.statusId, isActive: true, isDeleted: { $ne: true } }).lean();
     if (!status) return res.status(404).json({ message: 'Status not found' });
+
+    const existing = await GoogleLead.findOne({
+      ...leadCompanyFilter(req.leadsCompanyId),
+      ...assignedScope(req),
+      _id: id,
+      isDeleted: false,
+    }).select('convertedClient status').lean();
+    if (!existing) return res.status(404).json({ message: 'Lead not found' });
+    const lock = await assertLeadStatusMutable(req.leadsCompanyId, existing);
+    if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
 
     const now = new Date();
     const lead = await GoogleLead.findOneAndUpdate(

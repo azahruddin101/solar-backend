@@ -21,8 +21,12 @@ const CLIENT_TICKET = /^cticket-/; // client support attachments (company ↔ cl
 const DESIGN_VERSION = /^[0-9a-f]{24}-design-/; // archived quotation PDFs: <companyId>-design-<designId>-v-…
 const INVOICE_PDF = /^[0-9a-f]{24}-invoice-/; // archived tax invoices: <companyId>-invoice-<invoiceId>-…
 const RECEIPT_PDF = /^[0-9a-f]{24}-receipt-/; // payment receipts: <companyId>-receipt-<paymentId>-…
+const PRODUCT_DOC = /^[0-9a-f]{24}-proddoc-/; // product PDFs: <companyId>-proddoc-<productId>-…
 
-export const isProtected = (name) => DOC.test(name) || STEP.test(name) || TICKET.test(name) || CLIENT_TICKET.test(name) || DESIGN_VERSION.test(name) || INVOICE_PDF.test(name) || RECEIPT_PDF.test(name);
+const STOCK_BILL = /^[0-9a-f]{24}-bill-/; // supplier bills: <companyId>-bill-<batchId>-…
+const LOAN_DOC = /^[0-9a-f]{24}-loandoc-/; // loan step documents: <companyId>-loandoc-<loanId>-…
+
+export const isProtected = (name) => LOAN_DOC.test(name) || STOCK_BILL.test(name) || DOC.test(name) || STEP.test(name) || TICKET.test(name) || CLIENT_TICKET.test(name) || DESIGN_VERSION.test(name) || INVOICE_PDF.test(name) || RECEIPT_PDF.test(name) || PRODUCT_DOC.test(name);
 
 const key = () => crypto.createHash('sha256').update(`file-link:${env.jwtSecret}`).digest();
 const mac = (name, exp) => crypto.createHmac('sha256', key()).update(`${name}.${exp}`).digest('hex');
@@ -69,6 +73,13 @@ export async function assertCanOpen(user, name) {
     if (mayView('proposals')) return;
   } else if (INVOICE_PDF.test(name) || RECEIPT_PDF.test(name)) {
     if (mayView('finances')) return;
+  } else if (STOCK_BILL.test(name)) {
+    if (['inventory', 'finances'].some(mayView)) return;
+  } else if (LOAN_DOC.test(name)) {
+    if (mayView('loans')) return;
+  } else if (PRODUCT_DOC.test(name)) {
+    // whoever may see the catalog's products (see catalog.routes.js)
+    if (['proposals', 'inventory', 'finances', 'tasks'].some(mayView)) return;
   }
   throw forbidden('You do not have access to this file');
 }

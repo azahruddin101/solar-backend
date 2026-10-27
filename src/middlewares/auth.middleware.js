@@ -133,11 +133,10 @@ export const withPermission = (area, action) => [authenticate, permissionOnly(ar
  */
 export const withAreaAccess = (...areas) => {
   areas.forEach((area) => assertPermission(area));
-  return [
-    authenticate,
-    (req, res, next) => {
-      if (!hasAnyAreaAccess(req.user, ...areas)) throw forbidden(`You don't have access to ${areas.map((a) => PERMISSION_CATALOG[a].label).join(' or ')}. Ask your company admin.`);
-      next();
-    },
-  ];
+  const areaCheck = (req, res, next) => {
+    if (!hasAnyAreaAccess(req.user, ...areas)) throw forbidden(`You don't have access to ${areas.map((a) => PERMISSION_CATALOG[a].label).join(' or ')}. Ask your company admin.`);
+    next();
+  };
+  // not an `authorizes` gate on its own (each route still needs its exact permission); tests use it to replay access
+  return [authenticate, Object.assign(areaCheck, { areaCheck: areas })];
 };

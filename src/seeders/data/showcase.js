@@ -35,6 +35,13 @@ export const SHOWCASE_COMPANY = {
   ].join(''),
 };
 
+/** Who the showcase stock was bought from (see showcaseCatalog.js), by category name. */
+export const SHOWCASE_SUPPLIERS = [
+  { name: 'Sunrise Solar Distributors', phone: '9822077001', email: 'orders@sunrisesolar.in', gstNumber: '27AAGCS7712K1Z3', address: 'Bhosari MIDC, Pune 411026', categories: ['Solar panels', 'Inverters', 'Batteries & Energy Storage', 'Metering & Monitoring'] },
+  { name: 'Deccan Electricals & Cables', phone: '9850012300', email: 'sales@deccanelectricals.in', gstNumber: '27AADFD4421L1Z9', address: 'Budhwar Peth, Pune 411002', categories: ['Wire & Cabling', 'Chemical Earthing Kit', 'ACDB Box', 'DCDB Box'] },
+  { name: 'Shree Steel Structures', phone: '9763320045', email: 'info@shreesteel.in', gstNumber: '27ABKPS6623M1Z1', address: 'Chakan Industrial Area, Pune 410501', categories: ['Poles / pillars', 'Mounting Structure / Hardware'] },
+];
+
 /** roles are labels from the company's agent-role list */
 export const SHOWCASE_AGENTS = [
   { name: 'Sandeep Patil', email: 'sandeep.patil@suryashakti.in', phone: '9822154321', roles: ['Site surveyor', 'Inspector'] },
@@ -48,13 +55,16 @@ export const SHOWCASE_AGENTS = [
 /* ───────────── catalog ───────────── */
 
 const specs = (keys, values) => keys.map((key, i) => ({ key, value: values[i] ?? '' }));
+/** Category attribute definitions: [label, dataType = 'text', options, isRequired] (keys come from the labels). */
+const attrs = (...list) => list.map(([label, dataType = 'text', options = [], isRequired = false]) => ({ label, dataType, options, isRequired }));
 
 export const SHOWCASE_CATEGORIES = [
   {
     name: 'Solar panels',
     type: 'panels',
+    serialized: true, // products here are tracked per physical unit
     description: 'Modules used in the designer and printed on proposals.',
-    specKeys: ['Cell type', 'Efficiency (%)', 'Cell count', 'Bifaciality'],
+    attributes: attrs(['Cell type', 'select', ['Mono PERC', 'Mono PERC half-cut', 'N-type TOPCon'], true], ['Efficiency (%)', 'number', [], true], ['Cell count', 'number'], ['Bifaciality']),
     products: [
       { brand: 'Waaree', model: 'Ahnay WSMD-540', watts: 540, length: 2.278, width: 1.134, year: 2026, warranty: 25, price: 13900, sku: 'PNL-WA-540', values: ['Mono PERC half-cut', '20.9', '144', 'No'] },
       { brand: 'Tata Power Solar', model: 'TP440M-BF', watts: 440, length: 2.094, width: 1.038, year: 2025, warranty: 25, price: 11400, sku: 'PNL-TP-440', values: ['Mono PERC half-cut', '20.2', '108', 'No'] },
@@ -67,7 +77,7 @@ export const SHOWCASE_CATEGORIES = [
     name: 'Poles / pillars',
     type: 'poles',
     description: 'Mounting poles, priced per foot.',
-    specKeys: ['Material', 'Coating', 'Thickness'],
+    attributes: attrs(['Material'], ['Coating'], ['Thickness']),
     products: [
       { name: 'MS angle 50×50×5', shape: 'l-shape', price: 95, values: ['Mild steel', 'Red oxide primer + paint', '5 mm'] },
       { name: 'GI round pipe 2" (medium class)', shape: 'cylindrical', price: 140, values: ['Galvanised iron', 'Hot-dip zinc', '3.65 mm'] },
@@ -77,8 +87,9 @@ export const SHOWCASE_CATEGORIES = [
   },
   {
     name: 'Inverters',
+    serialized: true,
     description: 'On-grid, hybrid and micro string inverters.',
-    specKeys: ['Capacity (kW)', 'MPPT count', 'Phase', 'Max efficiency (%)', 'Wi-Fi'],
+    attributes: attrs(['Capacity (kW)', 'number', [], true], ['MPPT count', 'number'], ['Phase', 'select', ['Single phase', 'Three phase'], true], ['Max efficiency (%)', 'number'], ['Wi-Fi']),
     products: [
       { name: 'Havells 3.3 kW single-phase on-grid inverter', brand: 'Havells', model: 'Enviro GT 3300', sku: 'INV-HV-3K', price: 36000, warranty: 7, values: ['3.3', '1', 'Single phase', '97.6', 'Optional dongle'] },
       { name: 'Growatt MIN 5000TL-X on-grid inverter', brand: 'Growatt', model: 'MIN 5000TL-X', sku: 'INV-GW-5K', price: 48000, warranty: 5, values: ['5.0', '2', 'Single phase', '98.4', 'Built-in'] },
@@ -90,7 +101,7 @@ export const SHOWCASE_CATEGORIES = [
   {
     name: 'Wire & Cabling',
     description: 'Solar DC cable and multi-core AC copper / aluminium cabling.',
-    specKeys: ['Size (sq.mm)', 'Conductor', 'Insulation', 'Voltage rating'],
+    attributes: attrs(['Size (sq.mm)', 'number', [], true], ['Conductor'], ['Insulation'], ['Voltage rating']),
     products: [
       { name: 'Polycab solar DC cable 4 sq.mm (100 m roll)', brand: 'Polycab', model: 'Solar DC 4', sku: 'CAB-DC-4', price: 4500, unit: 'roll', values: ['4', 'Tinned copper, class 5', 'XLPO', '1500 V DC'] },
       { name: 'Polycab solar DC cable 6 sq.mm (100 m roll)', brand: 'Polycab', model: 'Solar DC 6', sku: 'CAB-DC-6', price: 6400, unit: 'roll', values: ['6', 'Tinned copper, class 5', 'XLPO', '1500 V DC'] },
@@ -101,7 +112,7 @@ export const SHOWCASE_CATEGORIES = [
   {
     name: 'Chemical Earthing Kit',
     description: 'Maintenance-free chemical earthing electrodes and compound.',
-    specKeys: ['Electrode type', 'Length (m)', 'Diameter (mm)', 'Backfill compound'],
+    attributes: attrs(['Electrode type'], ['Length (m)'], ['Diameter (mm)'], ['Backfill compound']),
     products: [
       { name: 'Copper-bonded earthing electrode 3 m with compound', brand: 'Ashlok', model: 'Safe-Earth 50', sku: 'ERT-AS-3M', price: 4200, values: ['Copper bonded steel', '3.0', '50', '25 kg included'] },
       { name: 'GI pipe chemical earthing kit 3 m', brand: 'Kalinga', model: 'GI-EK-3', sku: 'ERT-KL-3M', price: 2650, values: ['GI pipe', '3.0', '50', '25 kg included'] },
@@ -111,7 +122,7 @@ export const SHOWCASE_CATEGORIES = [
   {
     name: 'ACDB Box',
     description: 'AC distribution boxes with MCB / MCCB, SPD and energy-meter provisions.',
-    specKeys: ['Rating (A)', 'Phases', 'SPD class', 'IP rating'],
+    attributes: attrs(['Rating (A)', 'number', [], true], ['Phases'], ['SPD class'], ['IP rating', 'select', ['IP65', 'IP66']]),
     products: [
       { name: 'L&T single-phase 25 A ACDB', brand: 'L&T', model: 'Exora 25A-2P', sku: 'ACDB-LT-25', price: 3400, values: ['25', 'Single phase', 'Type 2', 'IP65'] },
       { name: 'Schneider Acti9 three-phase 32 A ACDB', brand: 'Schneider Electric', model: 'Acti9 32A-4P', sku: 'ACDB-SE-32', price: 6800, values: ['32', 'Three phase + N', 'Type 2', 'IP65'] },
@@ -121,7 +132,7 @@ export const SHOWCASE_CATEGORIES = [
   {
     name: 'DCDB Box',
     description: 'DC distribution boxes with fuses, SPD and a DC isolator.',
-    specKeys: ['Inputs / outputs', 'Fuse rating (A)', 'SPD rating', 'Enclosure'],
+    attributes: attrs(['Inputs / outputs'], ['Fuse rating (A)', 'number'], ['SPD rating'], ['Enclosure']),
     products: [
       { name: 'Hensel 1-in 1-out 1000 V DCDB', brand: 'Hensel', model: 'PV 1-1', sku: 'DCDB-HN-11', price: 3900, values: ['1 in / 1 out', '15', '1000 V DC Type 2', 'IP65 polycarbonate'] },
       { name: 'Hensel 2-in 2-out 1000 V DCDB', brand: 'Hensel', model: 'PV 2-2', sku: 'DCDB-HN-22', price: 5600, values: ['2 in / 2 out', '15', '1000 V DC Type 2', 'IP65 polycarbonate'] },
@@ -131,7 +142,7 @@ export const SHOWCASE_CATEGORIES = [
   {
     name: 'Mounting Structure / Hardware',
     description: 'Rails, clamps, fasteners and brackets.',
-    specKeys: ['Material', 'Hardware grade', 'Wind speed rating (km/h)'],
+    attributes: attrs(['Material'], ['Hardware grade'], ['Wind speed rating (km/h)']),
     products: [
       { name: 'Aluminium rail & clamp kit (per kW)', brand: 'Pennar', model: 'AL-4100', sku: 'MMS-AL-KW', price: 3200, unit: 'set', values: ['Aluminium 6063-T6 anodised', 'SS 304', '170'] },
       { name: 'GI mounting structure (per kW)', brand: 'Pennar', model: 'GI-HDG-KW', sku: 'MMS-GI-KW', price: 2600, unit: 'set', values: ['Hot-dip galvanised steel', 'SS 304', '150'] },
@@ -140,8 +151,9 @@ export const SHOWCASE_CATEGORIES = [
   },
   {
     name: 'Batteries & Energy Storage',
+    serialized: true,
     description: 'LiFePO4 and lead-acid storage.',
-    specKeys: ['Capacity (kWh)', 'Chemistry', 'Voltage (V)', 'Cycle life'],
+    attributes: attrs(['Capacity (kWh)', 'number', [], true], ['Chemistry', 'select', ['LiFePO4', 'Lead-acid tubular'], true], ['Voltage (V)', 'number'], ['Cycle life']),
     products: [
       { name: 'Luminous 5.12 kWh LiFePO4 battery', brand: 'Luminous', model: 'LFP 51.2V 100Ah', sku: 'BAT-LU-5K', price: 135000, values: ['5.12', 'LiFePO4', '51.2', '6000 @ 80% DoD'] },
       { name: 'Exide 12 V 150 Ah solar tubular battery', brand: 'Exide', model: 'Solar 12-150', sku: 'BAT-EX-150', price: 16800, values: ['1.8', 'Lead-acid tubular', '12', '1500 @ 80% DoD'] },
@@ -151,7 +163,7 @@ export const SHOWCASE_CATEGORIES = [
   {
     name: 'Metering & Monitoring',
     description: 'Net meters, CTs and remote monitoring.',
-    specKeys: ['Type', 'Accuracy class', 'Communication'],
+    attributes: attrs(['Type'], ['Accuracy class'], ['Communication']),
     products: [
       { name: 'Secure bi-directional net meter (single phase)', brand: 'Secure', model: 'Premier 300', sku: 'MTR-SC-1P', price: 3800, values: ['Bi-directional', '1.0', 'RS485'] },
       { name: 'HPL bi-directional net meter (three phase, CT)', brand: 'HPL', model: 'Trimax 3P4W', sku: 'MTR-HP-3P', price: 6900, values: ['Bi-directional', '0.5S', 'RS485'] },

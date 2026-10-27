@@ -63,7 +63,7 @@ export const PERMISSION_CATALOG = {
   },
   inventory: {
     label: 'Inventory',
-    description: 'Products, catalog categories, packages and installation charges',
+    description: 'Products, catalog categories, packages, installation charges, stock and suppliers',
     actions: {
       view: 'View',
       create: 'Create',
@@ -73,13 +73,14 @@ export const PERMISSION_CATALOG = {
   },
   tasks: {
     label: 'Installations',
-    description: 'Every installation and its steps — staff always see the steps assigned to them',
+    description: 'Every installation, its steps and AMC visits — staff always see the steps and visits assigned to them',
     actions: {
       view: 'View all',
       create: 'Start',
       update: 'Edit steps',
       assign: 'Assign steps',
       change_status: 'Update step status',
+      invoice_parts: 'Invoice parts used on AMC visits',
       delete: 'Delete',
     },
   },
@@ -98,6 +99,24 @@ export const PERMISSION_CATALOG = {
     actions: {
       view: 'View',
       update: 'Reply & change status',
+    },
+  },
+  expenses: {
+    label: 'Expenses',
+    description: 'What was spent on each proposal’s project, with the reason',
+    actions: {
+      view: 'View',
+      create: 'Add expenses',
+      update: 'Edit expenses',
+      delete: 'Delete expenses',
+    },
+  },
+  loans: {
+    label: 'Loans',
+    description: 'Clients who are buying with a loan, and their progress through the loan steps',
+    actions: {
+      view: 'View',
+      update: 'Update loan & steps',
     },
   },
 };

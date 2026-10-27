@@ -4,6 +4,7 @@ import { badRequest, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { capFirst } from '../utils/text.js';
 import { objectId } from '../utils/validators.js';
+import { stockSummary } from './stock.service.js';
 
 const ALLOWED_FIELDS = ['name', 'kw', 'price', 'description', 'items'];
 
@@ -103,26 +104,7 @@ function buildPackagePipeline(matchStage, sortStage = { $sort: { createdAt: -1 }
               _parentId: { $ifNull: [{ $toString: { $arrayElemAt: ['$_parent._id', 0] } }, ''] },
               _parentName: { $ifNull: [{ $arrayElemAt: ['$_parent.name', 0] }, ''] },
               _parentOrder: { $ifNull: [{ $arrayElemAt: ['$_parent.position', 0] }, 0] },
-              // Flatten specs array to "key: value, key: value" string
-              _specStr: {
-                $cond: {
-                  if: { $gt: [{ $size: { $ifNull: ['$specs', []] } }, 0] },
-                  then: {
-                    $reduce: {
-                      input: '$specs',
-                      initialValue: '',
-                      in: {
-                        $cond: [
-                          { $eq: ['$$value', ''] },
-                          { $concat: ['$$this.key', ': ', '$$this.value'] },
-                          { $concat: ['$$value', ', ', '$$this.key', ': ', '$$this.value'] },
-                        ],
-                      },
-                    },
-                  },
-                  else: { $ifNull: ['$description', ''] },
-                },
-              },
+              _catAttrs: { $ifNull: [{ $arrayElemAt: ['$_cat.attributes', 0] }, []] },
             },
           },
           { $project: { _cat: 0, _parent: 0 } },
@@ -157,7 +139,6 @@ function buildPackagePipeline(matchStage, sortStage = { $sort: { createdAt: -1 }
                   brand: { $ifNull: ['$$prod.brand', ''] },
                   model: { $ifNull: ['$$prod.model', ''] },
                   watts: { $ifNull: ['$$prod.watts', 0] },
-                  price: { $ifNull: ['$$prod.price', 0] },
                   hsnCode: { $ifNull: ['$$prod.hsnCode', ''] },
                   gstPercent: { $ifNull: ['$$prod.gstPercent', 0] },
                   type: { $ifNull: ['$$prod.type', ''] },
@@ -166,7 +147,9 @@ function buildPackagePipeline(matchStage, sortStage = { $sort: { createdAt: -1 }
                   parentId: { $ifNull: ['$$prod._parentId', ''] },
                   parentName: { $ifNull: ['$$prod._parentName', ''] },
                   parentOrder: { $ifNull: ['$$prod._parentOrder', 0] },
-                  spec: { $ifNull: ['$$prod._specStr', ''] },
+                  _attrs: { $ifNull: ['$$prod.attributes', {}] },
+                  _attrDefs: { $ifNull: ['$$prod._catAttrs', []] },
+                  _description: { $ifNull: ['$$prod.description', ''] },
                 },
               },
             },
@@ -179,13 +162,26 @@ function buildPackagePipeline(matchStage, sortStage = { $sort: { createdAt: -1 }
   ];
 }
 
-/** Add itemType to each item (done in JS after aggregation) */
-function enrichItems(pkgs) {
+/** "Efficiency (%): 21.5, Cell type: TOPCon" from the product's attributes in its category's order, else its description. */
+function specLine(attrs, defs, description) {
+  const shown = [...(defs || [])]
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .filter((d) => attrs?.[d.key] !== undefined && attrs[d.key] !== '')
+    .map((d) => `${d.label}: ${d.dataType === 'boolean' ? (attrs[d.key] ? 'Yes' : 'No') : attrs[d.key]}`);
+  return shown.length ? shown.join(', ') : description;
+}
+
+/** Add itemType, the spec line and each product's current selling price (from its batches; done in JS after aggregation) */
+async function enrichItems(company, pkgs) {
+  const ids = [...new Set(pkgs.flatMap((pkg) => (pkg.items || []).map((it) => it.productId)).filter(Boolean))];
+  const stock = await stockSummary(company._id, ids.map((id) => new mongoose.Types.ObjectId(id)));
   return pkgs.map((pkg) => ({
     ...pkg,
     id: pkg.id || String(pkg._id),
-    items: (pkg.items || []).map((it) => ({
+    items: (pkg.items || []).map(({ _attrs, _attrDefs, _description, ...it }) => ({
       ...it,
+      price: stock.get(it.productId)?.price || 0,
+      spec: specLine(_attrs, _attrDefs, _description),
       itemType: inferItemType(it.type, it.categoryName),
     })),
   }));
@@ -199,7 +195,7 @@ export const packageService = {
         { $sort: { createdAt: -1 } },
       ),
     );
-    return enrichItems(raw);
+    return enrichItems(company, raw);
   },
 
   get: async (company, id) => {
@@ -212,7 +208,7 @@ export const packageService = {
       }),
     );
     if (!raw.length) throw notFound('Package');
-    return enrichItems(raw)[0];
+    return (await enrichItems(company, raw))[0];
   },
 
   create: async (company, body) => {

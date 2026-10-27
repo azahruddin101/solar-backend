@@ -61,10 +61,11 @@ async function resolveAssignee(req, res, next) {
 router.use(bindLeadsTenant, scopeToOwnLeads);
 
 router.get('/statuses', view, h.statuses);
-router.get('/assignees', assign, async (req, res) => {
+router.get('/assignees', permissionOnly('leads', 'assign', 'view_all'), async (req, res) => {
   res.json((await leadStaff(req.company)).map((u) => ({ _id: u.id, name: u.name, email: u.email, status: 'active' })));
 });
 router.get('/export', exportLeads, rateLimit({ name: 'lead-export', windowMs: 60 * 60 * 1000, max: 20 }), h.exportLeads);
+router.get('/all', view, h.allList);
 
 // Manual leads: added on the company's own lead form (Manage Masters → Lead form) or imported from a sheet
 router.get('/form', view, h.manual.getLeadForm);
@@ -107,6 +108,85 @@ const unassignedFilter = (req, source) => ({
   // staff who only see their own leads never see unassigned ones
   ...(req.leadsAssignedTo ? { _id: null } : {}),
 });
+const QUICK_ASSIGN_SOURCES = Object.keys(QUICK_ASSIGN);
+
+/** ?sources=meta,google or body.sources — defaults to all three. */
+function quickAssignSources(req) {
+  const raw = req.body?.sources ?? req.query?.sources;
+  if (raw === undefined || raw === null || raw === '') return QUICK_ASSIGN_SOURCES;
+  const list = (Array.isArray(raw) ? raw : String(raw).split(','))
+    .map((s) => String(s).trim().toLowerCase())
+    .filter((s) => QUICK_ASSIGN_SOURCES.includes(s));
+  return list;
+}
+
+/** Oldest unassigned leads first, across the chosen sources. */
+async function pickUnassignedAcrossSources(req, count, sourceKeys = QUICK_ASSIGN_SOURCES) {
+  const entries = [];
+  for (const source of sourceKeys) {
+    const { model, order } = QUICK_ASSIGN[source];
+    const rows = await model.find(unassignedFilter(req, source)).sort(order).select('createdAt leadCreatedAt').lean();
+    for (const row of rows) {
+      entries.push({ source, id: String(row._id), at: row.leadCreatedAt || row.createdAt });
+    }
+  }
+  entries.sort((a, b) => new Date(a.at) - new Date(b.at) || a.source.localeCompare(b.source));
+  return entries.slice(0, count);
+}
+
+const runAssignHandler = (handler, req, leadIds) => new Promise((resolve, reject) => {
+  const fakeRes = {
+    statusCode: 200,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      if (this.statusCode >= 400) reject(Object.assign(new Error(body.error || body.message || 'Assign failed'), { status: this.statusCode }));
+      else resolve(body);
+    },
+  };
+  req.body = { leadIds, counsellorId: String(req.leadsAssignee._id) };
+  Promise.resolve(handler(req, fakeRes)).catch(reject);
+});
+
+router.get('/all/unassigned-count', assign, async (req, res) => {
+  if (req.leadsAssignedTo) return res.json({ unassigned: 0 });
+  const sourceKeys = quickAssignSources(req);
+  if (!sourceKeys.length) return res.json({ unassigned: 0 });
+  const counts = await Promise.all(
+    sourceKeys.map((source) => QUICK_ASSIGN[source].model.countDocuments(unassignedFilter(req, source))),
+  );
+  res.json({ unassigned: counts.reduce((sum, n) => sum + n, 0) });
+});
+router.post('/all/assign-unassigned', assign, resolveAssignee, async (req, res) => {
+  const count = Number(req.body?.count);
+  const sourceKeys = quickAssignSources(req);
+  if (!sourceKeys.length) return res.status(400).json({ error: 'Choose at least one lead source' });
+  if (!req.leadsAssignee) return res.status(400).json({ error: 'Choose the staff member' });
+  if (!Number.isInteger(count) || count < 1) return res.status(400).json({ error: 'Enter how many leads to assign (1 or more)' });
+  if (count > MAX_QUICK_ASSIGN) return res.status(400).json({ error: `You can assign up to ${MAX_QUICK_ASSIGN} leads at a time` });
+  const available = (await Promise.all(
+    sourceKeys.map((source) => QUICK_ASSIGN[source].model.countDocuments(unassignedFilter(req, source))),
+  )).reduce((sum, n) => sum + n, 0);
+  if (count > available) {
+    return res.status(400).json({ error: available ? `Only ${available} lead${available === 1 ? ' is' : 's are'} unassigned` : 'There are no unassigned leads in the sources you chose' });
+  }
+  const picked = await pickUnassignedAcrossSources(req, count, sourceKeys);
+  const bySource = { meta: [], google: [], manual: [] };
+  picked.forEach((p) => bySource[p.source].push(p.id));
+  try {
+    for (const source of Object.keys(QUICK_ASSIGN)) {
+      const ids = bySource[source];
+      if (!ids.length) continue;
+      await runAssignHandler(QUICK_ASSIGN[source].handler, req, ids);
+    }
+    res.json({ assigned: picked.length });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not assign leads' });
+  }
+});
+
 for (const source of Object.keys(QUICK_ASSIGN)) {
   router.get(`/${source}/unassigned-count`, assign, async (req, res) => {
     res.json({ unassigned: await QUICK_ASSIGN[source].model.countDocuments(unassignedFilter(req, source)) });

@@ -1,6 +1,14 @@
 // What a signed-in client may see: their own proposals (never drafts), the price breakdown, and their payments.
 // Clients may respond to proposals that are in “proposed” status (accept / reject / request changes).
-import { Client, Design, Invoice, Payment } from '../models/index.js';
+import { Client, Design, Invoice, Payment, Project } from '../models/index.js';
+import {
+  amcKind,
+  amcRequestRow,
+  effectiveAmcVisits,
+  ensureProjectAmc,
+  submitClientAmcRequest,
+  syncDesignAmcRequestsToProject,
+} from './amc.service.js';
 import { Company } from '../models/index.js';
 import { designerCatalog } from './catalog.service.js';
 import { notifyProposalResponse } from './notification.service.js';
@@ -45,21 +53,132 @@ export async function me(user) {
 
 export async function listProposals(user) {
   const designs = await Design.find({ company: user.company, client: user.client, status: VISIBLE }).select('-data -logs').sort({ updatedAt: -1 });
-  const sums = await Payment.aggregate([{ $match: { company: user.company, design: { $in: designs.map((d) => d._id) } } }, { $group: { _id: '$design', paid: { $sum: '$amount' } } }]);
+  const designIds = designs.map((d) => d._id);
+  const [sums, company, projects] = await Promise.all([
+    Payment.aggregate([{ $match: { company: user.company, design: { $in: designIds } } }, { $group: { _id: '$design', paid: { $sum: '$amount' } } }]),
+    Company.findById(user.company).select('amcTemplates currency'),
+    Project.find({ company: user.company, client: user.client, design: { $in: designIds } }).select('design status installationCompletedAt amcVisits amcOptionalSelections'),
+  ]);
+  const projectByDesign = new Map(projects.map((p) => [String(p.design), p]));
   return designs.map((d) => {
     const row = proposalRow(d);
     const paid = money(sums.find((s) => String(s._id) === d.id)?.paid);
-    return { ...row, paid, balance: row.status === 'won' ? money(row.total - paid) : null };
+    const amcPackages = amcPackagesViewForDesign(company, d, projectByDesign.get(d.id));
+    return {
+      ...row,
+      paid,
+      balance: row.status === 'won' ? money(row.total - paid) : null,
+      amcPackages: amcPackages.hasCatalog ? amcPackages : null,
+    };
   });
+}
+
+async function clientAmcVisits(user, designId) {
+  const project = await Project.findOne({ company: user.company, design: designId, client: user.client }).select('status installationCompletedAt amcVisits amcOptionalSelections');
+  if (!project) return { installationCompletedAt: null, visits: [] };
+  const company = await Company.findById(user.company).select('amcTemplates');
+  if (project.status === 'completed') await ensureProjectAmc(project, company);
+  const visits = (project.amcVisits || []).map((v) => ({
+    id: v.id,
+    name: v.name,
+    daysAfterInstallation: v.daysAfterInstallation,
+    kind: amcKind(v.kind),
+    price: v.price ?? 0,
+    description: v.description || '',
+    dueDate: v.dueDate,
+    clientRequestedDate: v.clientRequestedDate,
+    workflowStatus: v.workflowStatus,
+    assignee: v.assignee ? { id: String(v.assignee), name: v.assigneeName || '' } : null,
+    status: v.status,
+    completedAt: v.completedAt,
+    completedByName: v.completedByName || '',
+    completionNote: v.completionNote || '',
+    criteria: (v.criteria || []).map((c) => ({ id: c.id, label: c.label, checked: c.checked, note: c.note || '' })),
+  }));
+  return { installationCompletedAt: project.installationCompletedAt, visits };
+}
+
+function clientMayChooseAmcPackages(design) {
+  return design.status === 'proposed' || design.status === 'won';
+}
+
+/**
+ * What the client sees about maintenance on one proposal. `included`: the mandatory AMCs, scheduled by the company for
+ * every job (date, technician, status). `services`: the optional AMCs, each with the requests made for it — by the
+ * client, or by the company on their behalf — newest first. The client can request a service again and again.
+ */
+function amcPackagesViewForDesign(company, design, project) {
+  const templates = company?.amcTemplates || [];
+  const visitByName = new Map((project ? effectiveAmcVisits(project, company) : []).map((v) => [v.name, v]));
+  const included = templates.filter((t) => amcKind(t.kind) === 'mandatory').map((t) => {
+    const v = visitByName.get(t.name);
+    return {
+      name: t.name,
+      description: t.description || '',
+      price: Number(t.price) || 0,
+      visit: v ? { dueDate: v.dueDate || null, status: v.status, completedAt: v.completedAt || null, assignee: v.assigneeName ? { name: v.assigneeName } : null } : null,
+    };
+  });
+  const requestsByPackage = new Map();
+  for (const r of [...(design.amcRequests || [])].reverse()) {
+    if (r.status === 'cancelled') continue;
+    if (!requestsByPackage.has(r.packageName)) requestsByPackage.set(r.packageName, []);
+    requestsByPackage.get(r.packageName).push(amcRequestRow(r));
+  }
+  const services = templates.filter((t) => amcKind(t.kind) === 'optional').map((t) => ({
+    name: t.name,
+    description: t.description || '',
+    price: Number(t.price) || 0,
+    requests: requestsByPackage.get(t.name) || [],
+  }));
+  return {
+    currency: company?.currency || 'INR',
+    hasCatalog: included.length + services.length > 0,
+    canRequest: clientMayChooseAmcPackages(design),
+    included,
+    services,
+  };
+}
+
+async function amcPackagesView(user, design, project = null) {
+  const company = await Company.findById(user.company).select('amcTemplates currency');
+  let proj = project;
+  if (!proj) {
+    proj = await Project.findOne({ company: user.company, design: design._id, client: user.client }).select('status installationCompletedAt amcVisits amcOptionalSelections');
+  }
+  return amcPackagesViewForDesign(company, design, proj);
+}
+
+/** Client asks for an optional AMC on a preferred date (or changes the date of one of their own requests). */
+export async function submitAmcRequest(user, designId, body) {
+  const design = await Design.findOne({
+    _id: objectId(designId, 'Proposal'),
+    company: user.company,
+    client: user.client,
+    status: VISIBLE,
+  });
+  if (!design) throw notFound('Proposal');
+  const company = await Company.findById(user.company).select('amcTemplates');
+  await submitClientAmcRequest({
+    company,
+    design,
+    packageName: body.packageName,
+    requestedDate: body.requestedDate,
+    note: body.note,
+    requestId: body.requestId || null,
+  });
+  return getProposal(user, designId);
 }
 
 export async function getProposal(user, id) {
   const design = await Design.findOne({ _id: objectId(id, 'Proposal'), company: user.company, client: user.client, status: VISIBLE }).select('-data -logs');
   if (!design) throw notFound('Proposal');
-  const [payments, invoice, client] = await Promise.all([
+  const [payments, invoice, client, amc, amcPackages] = await Promise.all([
     Payment.find({ company: user.company, design: design._id }).sort({ createdAt: 1 }),
     Invoice.findOne({ company: user.company, design: design._id }).sort({ createdAt: -1 }),
     me(user),
+    clientAmcVisits(user, design._id),
+    amcPackagesView(user, design),
   ]);
   const total = totalOf(design);
   const paid = money(payments.reduce((a, p) => a + p.amount, 0));
@@ -71,6 +190,8 @@ export async function getProposal(user, id) {
     balance: design.status === 'won' ? money(total - paid) : null,
     payments,
     invoice,
+    amc,
+    amcPackages,
   };
 }
 

@@ -20,6 +20,22 @@ export async function reorderCategories(req, res) {
   res.json(await categoryService.reorder(req.company, req.body?.ids));
 }
 
+export async function uploadCategoryIcon(req, res) {
+  res.json(await categoryService.setIcon(req.company, req.params.id, req.file));
+}
+
+export async function uploadProductDocument(req, res) {
+  res.status(201).json(await productService.addDocument(req.company, req.params.id, req.file));
+}
+
+export async function deleteProductDocument(req, res) {
+  res.json(await productService.removeDocument(req.company, req.params.id, req.params.docId));
+}
+
+export async function deleteCategoryIcon(req, res) {
+  res.json(await categoryService.removeIcon(req.company, req.params.id));
+}
+
 export async function reorderParentCategories(req, res) {
   res.json(await parentCategoryService.reorder(req.company, req.body?.ids));
 }

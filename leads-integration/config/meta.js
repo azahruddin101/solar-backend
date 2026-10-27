@@ -53,7 +53,7 @@ const isMetaAppFromEnv = () => Boolean(process.env.META_APP_ID && process.env.ME
 // CRM web addresses allowed to receive the browser back after Facebook Login (the CORS origins)
 const crmOrigins = () =>
   (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean);
-const DEFAULT_RETURN_PATH = '/dashboard/leads/integrations';
+const DEFAULT_RETURN_PATH = '/dashboard/settings?tab=integrations&source=meta';
 
 const getMetaConfig = (companyId) => {
   const cid = companyId || getLeadCompanyId();

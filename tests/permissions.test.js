@@ -11,9 +11,17 @@ import {
 } from '../src/constants/permissions.js';
 import { hasAreaAccess, hasPermission } from '../src/middlewares/auth.middleware.js';
 import * as frontend from '../../frontend/src/lib/permissions.js';
+import { AREA_STYLE, PLAIN } from '../../frontend/src/lib/permissionStyles.js';
 
 test('the frontend mirrors the permission catalog exactly', () => {
   assert.deepEqual(frontend.PERMISSION_CATALOG, PERMISSION_CATALOG);
+});
+
+test('the staff and role screens have a style and plain-words text for every area and action', () => {
+  for (const [area, a] of Object.entries(PERMISSION_CATALOG)) {
+    assert.ok(AREA_STYLE[area]?.icon && AREA_STYLE[area].bar && AREA_STYLE[area].soft, `no style for the ${area} area`);
+    for (const action of Object.keys(a.actions)) assert.ok(PLAIN[area]?.[action], `no plain-words text for ${area}:${action}`);
+  }
 });
 
 test('every area has view, and every permission string is area:action', () => {

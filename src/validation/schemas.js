@@ -1,6 +1,6 @@
 // Request schemas, one per form/endpoint. Objects are "loose": fields not listed here pass through untouched
 // (the services still pick what they accept), while every listed field is checked and normalised.
-import { CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, PAYMENT_MODES, PILLAR_SHAPES, PRODUCT_TYPES, STAFF_PERMISSIONS, STEP_PRIORITIES, STEP_STATUS, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS, CLIENT_TICKET_CATEGORIES } from '../constants/index.js';
+import { ATTRIBUTE_TYPES, PRICE_TYPES, UNIT_STATUS, CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, PAYMENT_MODES, PILLAR_SHAPES, PRODUCT_TYPES, STAFF_PERMISSIONS, LOAN_STATUS, STEP_PRIORITIES, STEP_STATUS, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS, CLIENT_TICKET_CATEGORIES } from '../constants/index.js';
 import * as f from './common.js';
 
 const { z } = f;
@@ -31,6 +31,36 @@ export const clientSchema = obj({
   referredBy: obj({ name: f.personNameOptional, phone: f.phoneOptional }).optional(),
 });
 export const clientUpdateSchema = clientSchema.partial();
+
+/* ───────────── expenses ───────────── */
+
+export const expenseSchema = obj({
+  amount: f.num({ min: 0.01, max: 1e10, label: 'Amount' }),
+  reason: f.textRequired(300, 'Reason'),
+  note: f.textOptional(500, 'Note'),
+  spentOn: z.string().trim().optional(),
+});
+export const projectBudgetSchema = obj({
+  amount: f.num({ min: 0.01, max: 1e10, label: 'Budget' }),
+  note: f.textOptional(300, 'Note'),
+});
+
+/* ───────────── loans ───────────── */
+
+export const loanStepsSchema = obj({
+  steps: z.array(obj({ name: f.textRequired(80, 'Step name'), description: f.textOptional(400, 'Description') })).max(30, 'You can have up to 30 steps'),
+});
+export const loanUpdateSchema = obj({
+  status: z.enum(LOAN_STATUS, 'Invalid loan status').optional(),
+  lender: f.textOptional(120, 'Bank / lender'),
+  amount: f.numOptional({ min: 0, max: 1e10, label: 'Loan amount' }),
+  notes: f.textOptional(1000, 'Notes'),
+});
+export const loanStepUpdateSchema = obj({
+  status: z.enum(STEP_STATUS, 'Invalid step status').optional(),
+  remark: f.textOptional(500, 'Remark'),
+});
+export const loanDocumentRenameSchema = obj({ name: f.textRequired(200, 'Document name') });
 
 /* ───────────── company / admin ───────────── */
 
@@ -116,7 +146,14 @@ export const categorySchema = obj({
   name: f.textRequired(60, 'Category name'),
   description: f.textOptional(300, 'Description'),
   type: z.enum(PRODUCT_TYPES, 'Invalid category type').optional(),
-  specKeys: strArray(40).optional(),
+  attributes: z.array(obj({
+    key: f.textOptional(40, 'Attribute key'),
+    label: f.textRequired(60, 'Attribute label'),
+    dataType: z.enum(ATTRIBUTE_TYPES, 'Invalid attribute type').optional(),
+    isRequired: z.boolean().optional(),
+    options: strArray(50).optional(),
+    sortOrder: f.numOptional({ min: 0, max: 1000, label: 'Order' }),
+  })).max(40, 'A category can have up to 40 attributes').optional(),
   parent: z.union([f.objectIdString, z.literal(''), z.null()]).optional(), // '' or null: not under any parent category
 });
 export const categoryUpdateSchema = categorySchema.partial();
@@ -127,9 +164,9 @@ export const parentCategorySchema = obj({
 });
 export const parentCategoryUpdateSchema = parentCategorySchema.partial();
 
-const spec = obj({ key: z.string().trim().max(60, 'Specification name is too long'), value: z.string().trim().max(200, 'Specification value is too long').optional() });
-const year = new Date().getFullYear() + 1;
+const attributeValue = z.union([z.string().max(200, 'Attribute values can be at most 200 characters'), z.number(), z.boolean(), z.null()]);
 
+// No prices, stock or manufacture year here: those belong to batches (stockReceiveSchema)
 export const productSchema = obj({
   category: f.objectIdString,
   name: f.textOptional(120, 'Product name'),
@@ -138,20 +175,66 @@ export const productSchema = obj({
   sku: f.skuOptional,
   hsnCode: f.hsnOptional,
   unit: f.textOptional(20, 'Unit'),
-  price: f.numOptional({ min: 0, max: 1e9, label: 'Price' }),
   gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
-  quantity: f.numOptional({ min: 0, max: 1e9, label: 'Quantity' }),
-  warrantyYears: f.numOptional({ min: 0, max: 60, int: true, label: 'Warranty' }),
+  warrantyMonths: f.numOptional({ min: 0, max: 720, int: true, label: 'Warranty' }),
+  warrantyYears: f.numOptional({ min: 0, max: 60, label: 'Warranty' }), // older clients; converted to months
+  reorderLevel: f.numOptional({ min: 0, max: 1e9, label: 'Reorder level' }),
+  isSerialized: z.boolean().optional(),
   description: f.textOptional(1000, 'Description'),
+  attributes: z.record(z.string().max(40), attributeValue).optional(),
   watts: f.numOptional({ min: 1, max: 2000, label: 'Watt' }),
-  manufactureYear: f.numOptional({ min: 1990, max: year, int: true, label: 'Manufacture year' }),
   length: f.numOptional({ min: 0.2, max: 5, label: 'Length' }),
   width: f.numOptional({ min: 0.2, max: 5, label: 'Width' }),
   shape: z.enum(PILLAR_SHAPES, 'Invalid shape').optional(),
-  specs: z.array(spec).max(40, 'A product can have up to 40 specifications').optional(),
 });
 export const productUpdateSchema = productSchema.partial();
 
+/* ───────────── stock ───────────── */
+
+export const supplierSchema = obj({
+  name: f.orgNameRequired,
+  phone: f.phoneOptional,
+  email: f.emailOptional,
+  gstNumber: f.gstinOptional,
+  address: f.textOptional(400, 'Address'),
+  notes: f.textOptional(500, 'Notes'),
+  categories: z.array(f.objectIdString).max(100, 'Choose up to 100 categories').optional(),
+});
+export const supplierUpdateSchema = supplierSchema.partial();
+
+const year = new Date().getFullYear() + 1;
+const dateOptional = z.preprocess((v) => (v === '' ? null : v), z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Invalid date').nullable().optional());
+const batchFields = {
+  supplier: f.objectIdString,
+  batchNo: f.textOptional(60, 'Batch number'),
+  mfgDate: dateOptional,
+  mfgYear: f.numOptional({ min: 1990, max: year, int: true, label: 'Manufacture year' }),
+  receivedDate: dateOptional,
+  purchasePrice: f.numOptional({ min: 0, max: 1e10, label: 'Purchase price' }),
+  basePrice: f.num({ min: 0, max: 1e10, label: 'Base price' }),
+  wholesalePrice: f.num({ min: 0, max: 1e10, label: 'Wholesale price' }),
+  retailPrice: f.num({ min: 0, max: 1e10, label: 'Retail price' }),
+  note: f.textOptional(300, 'Note'),
+};
+/** Receiving stock: all three selling prices are required; serialized products send their serial numbers instead of a quantity. */
+export const stockReceiveSchema = obj({
+  ...batchFields,
+  qtyReceived: f.numOptional({ min: 0, max: 1e7, label: 'Quantity' }),
+  serials: strArray(2000, 80).optional(),
+});
+export const batchUpdateSchema = obj(batchFields).partial();
+export const unitStatusSchema = obj({
+  status: z.enum(UNIT_STATUS, 'Invalid status'),
+  project: f.objectIdOrBlank,
+  installDate: dateOptional,
+});
+
+const stockLine = {
+  productId: f.objectIdString,
+  qty: f.numOptional({ min: 0, max: 1e7, label: 'Quantity' }),
+  batch: f.objectIdOrBlank, // blank: oldest batches first (FIFO)
+  serials: strArray(2000, 80).optional(),
+};
 const packageItem = obj({ productId: f.objectIdString, qty: f.num({ min: 0, max: 1e6, label: 'Quantity' }), unit: f.textOptional(20, 'Unit') });
 export const packageSchema = obj({
   name: f.textRequired(120, 'Package name'),
@@ -187,6 +270,55 @@ export const agentStepStatusSchema = obj({
 });
 export const noteSchema = obj({ message: f.textRequired(1000, 'Note') });
 export const projectStartSchema = obj({ design: f.objectIdString });
+
+const amcTemplateRow = obj({
+  name: f.textRequired(80, 'AMC name'),
+  daysAfterInstallation: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined ? null : Number(v)),
+    z.number().int().min(1).max(3650).nullable().optional(),
+  ),
+  kind: z.enum(['mandatory', 'optional']).optional(),
+  price: f.num({ min: 0, max: 1e9, label: 'Price' }).optional(),
+  description: z.string().max(30000).optional(),
+  criteria: strArray(40, 200).optional(),
+}).superRefine((row, ctx) => {
+  const kind = row.kind === 'optional' ? 'optional' : 'mandatory';
+  if (kind === 'mandatory' && (row.daysAfterInstallation == null || !Number.isFinite(row.daysAfterInstallation))) {
+    ctx.addIssue({ code: 'custom', message: 'Days after installation is required for mandatory visits', path: ['daysAfterInstallation'] });
+  }
+});
+export const amcTemplatesSchema = obj({ templates: z.array(amcTemplateRow).max(20, 'Up to 20 AMC schedules') });
+export const portalAmcRequestSchema = obj({
+  packageName: f.textRequired(80, 'Package'),
+  requestedDate: z.string().trim().min(1, 'Choose a preferred date'),
+  note: f.textOptional(500, 'Note'),
+  requestId: f.objectIdOrBlank, // change the date of this booking instead of making a new one
+});
+/** The company adds a visit to an installation. */
+export const amcVisitCreateSchema = obj({
+  name: f.textRequired(80, 'AMC'),
+  date: z.string().trim().min(1, 'Choose a date'),
+  note: f.textOptional(500, 'Note'),
+  assigneeId: f.objectIdOrBlank,
+});
+export const amcRequestAssignSchema = obj({
+  assigneeId: f.objectIdString,
+});
+export const amcVisitCompleteSchema = obj({
+  note: f.textOptional(1000, 'Note'),
+  criteria: z.array(obj({
+    id: f.objectIdString,
+    checked: z.boolean().optional(),
+    note: f.textOptional(300, 'Note'),
+  })).optional(),
+});
+
+/** Parts replaced on an AMC visit, taken from stock and invoiced to the client. */
+export const amcPartsInvoiceSchema = obj({
+  lines: z.array(obj({ ...stockLine, priceType: z.enum(PRICE_TYPES, 'Choose base, wholesale or retail price').optional() })).min(1, 'Add at least one part').max(50, 'Up to 50 parts'),
+  withGst: z.boolean().optional(),
+  note: f.textOptional(300, 'Note'),
+});
 
 /* ───────────── support tickets (fields arrive as multipart text) ───────────── */
 
@@ -266,12 +398,17 @@ export const paymentSchema = obj({
 
 const invoiceLineSchema = obj({
   name: f.textRequired(160, 'Line item name'),
-  detail: f.textOptional(300, 'Detail'),
+  detail: f.textOptional(600, 'Detail'),
   hsn: f.hsnOptional,
   qty: f.numOptional({ min: 0, max: 1e6, label: 'Quantity' }),
   unit: f.textOptional(20, 'Unit'),
-  rate: f.num({ min: 0, max: 1e10, label: 'Rate' }),
+  rate: f.num({ min: 0, max: 1e10, label: 'Rate' }), // a product line is priced from its batch instead
   gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
+  // a line sold from stock (see stock.service.js allocateInvoiceLines)
+  productId: f.objectIdString.optional(),
+  priceType: z.enum(PRICE_TYPES, 'Choose base, wholesale or retail price').optional(),
+  batch: f.objectIdOrBlank,
+  serials: strArray(2000, 80).optional(),
 });
 
 /** Line items and discount flags; totals are recomputed on the server (BIZ-001). */
@@ -286,7 +423,22 @@ export const invoicePricingInputSchema = obj({
   paymentTerms: f.textOptional(120, 'Payment terms'),
 });
 
+/** Optional reference and delivery details printed on an invoice. */
+export const invoiceDetailsSchema = obj({
+  reference: f.textOptional(120, 'Reference'),
+  otherReferences: f.textOptional(120, 'Other references'),
+  buyerOrderNo: f.textOptional(80, 'Buyer’s order no.'),
+  buyerOrderDate: f.textOptional(20, 'Date'),
+  dispatchDocNo: f.textOptional(80, 'Dispatch doc no.'),
+  deliveryNoteDate: f.textOptional(20, 'Delivery note date'),
+  dispatchedThrough: f.textOptional(120, 'Dispatched through'),
+  destination: f.textOptional(120, 'Destination'),
+  termsOfDelivery: f.textOptional(300, 'Terms of delivery'),
+});
+
 export const invoiceCreateSchema = obj({
+  billToCompany: f.textOptional(120, 'Company name'),
+  details: invoiceDetailsSchema.optional(),
   pricing: invoicePricingInputSchema.optional(),
   termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
 });
@@ -296,12 +448,31 @@ export const directInvoiceSchema = obj({
   client: z.string().optional().nullable(),
   billTo: obj({
     name: f.orgNameRequired,
+    company: f.textOptional(120, 'Company name'),
     phone: f.phoneOptional,
     email: f.emailOptional,
     address: f.textOptional(400, 'Address'),
     gstNumber: f.gstinOptional,
   }),
   title: f.textOptional(160, 'Title'),
+  details: invoiceDetailsSchema.optional(),
   pricing: invoicePricingInputSchema,
   termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
+});
+
+/** A receipt with no proposal: who paid, optional title, and the payment details. */
+export const directReceiptSchema = obj({
+  client: z.string().optional().nullable(),
+  billTo: obj({
+    name: f.orgNameRequired,
+    phone: f.phoneOptional,
+    email: f.emailOptional,
+    address: f.textOptional(400, 'Address'),
+  }),
+  title: f.textOptional(160, 'Title'),
+  amount: f.num({ min: 0.01, max: 1e10, label: 'Amount' }),
+  mode: z.enum(PAYMENT_MODES, 'Choose how the payment was made'),
+  reference: f.textOptional(80, 'Reference'),
+  note: f.textOptional(300, 'Note'),
+  receivedOn: z.string().optional(),
 });

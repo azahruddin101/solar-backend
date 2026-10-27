@@ -6,7 +6,11 @@ export async function list(req, res) {
   res.json(await tickets.listClientTickets(req.user, req.query));
 }
 export async function unread(req, res) {
-  res.json({ unread: await tickets.clientTicketUnreadCount(req.user) });
+  const [unread, open] = await Promise.all([
+    tickets.clientTicketUnreadCount(req.user),
+    tickets.clientTicketOpenCount(req.user),
+  ]);
+  res.json({ unread, open });
 }
 export async function get(req, res) {
   res.json(await tickets.getClientTicket(req.user, req.params.id));

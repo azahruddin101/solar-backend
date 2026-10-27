@@ -123,6 +123,21 @@ export async function clientTicketUnreadCount(user) {
   return ClientTicket.countDocuments({ ...scope, [unreadField(user)]: { $gt: 0 } });
 }
 
+/** Open or in-progress requests (sidebar badge for the company / staff). */
+export async function clientTicketOpenCount(user) {
+  let scope;
+  try {
+    scope = scopeOf(user);
+  } catch {
+    return 0;
+  }
+  return ClientTicket.countDocuments({ ...scope, status: { $in: ['open', 'in_progress'] } });
+}
+
+export async function clientTicketOpenCountForCompany(companyId) {
+  return ClientTicket.countDocuments({ company: companyId, status: { $in: ['open', 'in_progress'] } });
+}
+
 /** Full conversation + audit log. Opening it marks the viewer's side as read. */
 export async function getClientTicket(user, id) {
   const ticket = await load(user, id);

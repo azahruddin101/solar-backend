@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { validate } from '../middlewares/validate.middleware.js';
 import * as S from '../validation/schemas.js';
 import * as portal from '../services/portal.service.js';
+import { listMyLoans } from '../services/loan.service.js';
 import * as tickets from '../controllers/clientTicket.controller.js';
 import { uploadClientTicketFiles } from '../middlewares/upload.middleware.js';
 
@@ -18,8 +19,10 @@ const wrap = (fn) => async (req, res, next) => {
 router.get('/me', wrap((req) => portal.me(req.user)));
 router.get('/proposals', wrap((req) => portal.listProposals(req.user)));
 router.get('/proposals/:id', wrap((req) => portal.getProposal(req.user, req.params.id)));
+router.post('/proposals/:id/amc-requests', validate(S.portalAmcRequestSchema), wrap((req) => portal.submitAmcRequest(req.user, req.params.id, req.body)));
 router.post('/proposals/:id/response', validate(S.portalProposalResponseSchema), wrap((req) => portal.respondToProposal(req.user, req.params.id, req.body)));
 router.get('/proposals/:id/design', wrap((req) => portal.getDesignData(req.user, req.params.id)));
+router.get('/loans', wrap((req) => listMyLoans(req.user))); // the loans on their own proposals, with their steps
 router.get('/catalog', wrap((req) => portal.viewerCatalog(req.user)));
 
 // Help & support: the client's own requests to their solar company (never the company's tickets with the platform)

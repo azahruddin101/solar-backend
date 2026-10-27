@@ -1,41 +1,26 @@
-// A company's product catalog: categories the company defines, and the products in them. Every product
-// can carry free-form key/value specifications. A category can be marked as holding solar panels or poles;
-// its products are then picked up by the designer, so they also carry watt + size / shape + a price per foot.
+// A company's product catalog: categories the company defines, and the products in them. Each category defines the
+// attributes its products carry (attribute.service.js). A category can be marked as holding solar panels or poles;
+// its products are then picked up by the designer, so they also carry watt + size / shape. Prices and stock are not
+// on the product: they come from its batches (stock.service.js).
 import { DEFAULT_CATEGORIES, DEFAULT_PANELS, DEFAULT_PILLARS, DEFAULT_PRODUCT_UNITS, PRODUCT_TYPES } from '../constants/index.js';
-import { Category, Package, ParentCategory, Product } from '../models/index.js';
+import { Batch, Category, Package, ParentCategory, Product, Supplier } from '../models/index.js';
 import { seedParentCategories } from '../migrations/parentCategory.migration.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { capFirst } from '../utils/text.js';
 import { objectId } from '../utils/validators.js';
+import { attributeKey, cleanAttributeDefs, textAttributes, validateAttributes } from './attribute.service.js';
+import { stockSummary } from './stock.service.js';
+import { deleteFile } from './storage.service.js';
 
-const MAX_SPECS = 40;
-const COMMON = ['name', 'brand', 'model', 'sku', 'hsnCode', 'price', 'gstPercent', 'quantity', 'warrantyYears', 'description'];
+const COMMON = ['name', 'brand', 'model', 'sku', 'hsnCode', 'gstPercent', 'warrantyMonths', 'reorderLevel', 'isSerialized', 'description'];
 const FIELDS = {
   general: [...COMMON, 'unit'],
-  panels: [...COMMON, 'unit', 'watts', 'manufactureYear', 'length', 'width'],
+  panels: [...COMMON, 'unit', 'watts', 'length', 'width'],
   poles: [...COMMON, 'unit', 'shape'],
 };
 
-
-
-/** [{ key, value }] from the form: rows without a name are dropped, a repeated name is an error. */
-function cleanSpecs(specs) {
-  if (!Array.isArray(specs)) throw badRequest('Invalid specifications');
-  const out = [];
-  const seen = new Set();
-  for (const s of specs) {
-    const key = String(s?.key ?? '').trim();
-    if (!key) continue;
-    if (seen.has(key.toLowerCase())) throw badRequest(`“${key}” is listed twice in the specifications`);
-    seen.add(key.toLowerCase());
-    out.push({ key, value: String(s?.value ?? '').trim() });
-  }
-  if (out.length > MAX_SPECS) throw badRequest(`A product can have up to ${MAX_SPECS} specifications`);
-  return out;
-}
-
-const TYPED = ['watts', 'manufactureYear', 'length', 'width', 'shape'];
+const TYPED = ['watts', 'length', 'width', 'shape'];
 
 function productUnitsList(company) {
   const raw = company?.productUnits;
@@ -59,8 +44,12 @@ function applyProduct(product, category, body, company) {
   product.type = category.type;
   const { type } = product;
   Object.assign(product, pick(body, FIELDS[type]));
+  // older clients send the warranty in years
+  if (body?.warrantyMonths === undefined && body?.warrantyYears != null && body.warrantyYears !== '') product.warrantyMonths = Math.round(Number(body.warrantyYears) * 12);
   for (const field of TYPED) if (!FIELDS[type].includes(field)) product[field] = undefined; // left over from a previous type
-  if (body?.specs !== undefined) product.specs = cleanSpecs(body.specs);
+  // checked on every create and edit: a category that gained a required attribute asks for it when the product is next saved
+  product.attributes = validateAttributes(category.attributes, body?.attributes, product.isNew ? {} : product.attributes);
+  product.markModified('attributes');
   product.unit = resolveProductUnit(company, product.unit);
   if (type === 'panels') {
     // imported panels come with brand + model only; those name the product
@@ -79,6 +68,22 @@ async function getCategory(company, id) {
   return category;
 }
 
+function categoryIconFilename(iconUrl) {
+  if (!iconUrl) return '';
+  return String(iconUrl).replace(/^\/uploads\//, '').trim();
+}
+
+async function clearCategoryIcon(category) {
+  const name = categoryIconFilename(category.icon);
+  category.icon = '';
+  if (name) await deleteFile(name).catch(() => {});
+}
+
+async function categoryWithProductCount(company, category) {
+  const n = await Product.countDocuments({ company: company._id, category: category._id });
+  return { ...category.toJSON(), products: n };
+}
+
 async function applyCategory(company, category, body) {
   Object.assign(category, pick(body, ['name', 'description']));
   if (body?.type !== undefined) {
@@ -91,10 +96,8 @@ async function applyCategory(company, category, body) {
   const twin = await Category.findOne({ company: company._id, _id: { $ne: category._id }, name }).collation({ locale: 'en', strength: 2 });
   if (twin) throw conflict('You already have a category with that name');
   if (body?.parent !== undefined) category.parent = body.parent ? (await getParentCategory(company, body.parent))._id : null;
-  if (body?.specKeys !== undefined) {
-    if (!Array.isArray(body.specKeys)) throw badRequest('Invalid specification names');
-    category.specKeys = [...new Set(body.specKeys.map((k) => String(k ?? '').trim()).filter(Boolean))].slice(0, MAX_SPECS);
-  }
+  // existing products keep their values when the definitions change (see validateAttributes)
+  if (body?.attributes !== undefined) category.attributes = cleanAttributeDefs(body.attributes);
   await category.save();
   // the products follow their category; panels still missing a watt or size stay out of the designer until edited
   if (retyped) await Product.updateMany({ company: company._id, category: category._id }, { type: category.type });
@@ -170,15 +173,43 @@ export const categoryService = {
     await Category.bulkWrite(ids.map((id, i) => ({ updateOne: { filter: { _id: objectId(id, 'Category'), company: company._id }, update: { position: i + 1 } } })));
     return categoryService.list(company);
   },
-  /** Deleting a category also deletes its products. */
+  /** Deleting a category also deletes its products — unless one of them has stock history (batches). */
   remove: async (company, id) => {
     const category = await getCategory(company, id);
+    const products = await Product.find({ company: company._id, category: category._id }).select('documents');
+    if (await Batch.exists({ company: company._id, product: { $in: products.map((p) => p._id) } })) throw conflict('Products in this category have stock received. Move them to another category first');
     await Product.deleteMany({ company: company._id, category: category._id });
+    await deleteProductFiles(products);
+    await clearCategoryIcon(category);
+    await Supplier.updateMany({ company: company._id, categories: category._id }, { $pull: { categories: category._id } });
     await category.deleteOne();
+  },
+  setIcon: async (company, id, file) => {
+    if (!file?.filename) throw badRequest('Choose an image to upload');
+    const category = await getCategory(company, id);
+    const old = categoryIconFilename(category.icon);
+    category.icon = `/uploads/${file.filename}`;
+    await category.save();
+    if (old && old !== file.filename) await deleteFile(old).catch(() => {});
+    return categoryWithProductCount(company, category);
+  },
+  removeIcon: async (company, id) => {
+    const category = await getCategory(company, id);
+    await clearCategoryIcon(category);
+    await category.save();
+    return categoryWithProductCount(company, category);
   },
 };
 
 /* ───────────── products ───────────── */
+
+export const MAX_PRODUCT_DOCUMENTS = 10;
+
+/** Removes the stored PDFs of products that are being deleted. */
+async function deleteProductFiles(products) {
+  const names = products.flatMap((p) => (p.documents || []).map((d) => String(d.url).replace(/^\/uploads\//, '')));
+  await Promise.all(names.map((n) => deleteFile(n).catch(() => {})));
+}
 
 async function getProduct(company, id) {
   const product = await Product.findOne({ _id: objectId(id, 'Product'), company: company._id });
@@ -186,30 +217,80 @@ async function getProduct(company, id) {
   return product;
 }
 
+/**
+ * Products as the API returns them: with `stock` (sum of the batches' remaining quantity), `lowStock`, `hasBatches`
+ * (stock was ever received: serial tracking can no longer change), and `price` —
+ * read-only, the current selling price from the batches (stockSummary), so the designer and proposals keep working.
+ */
+async function withStock(company, products) {
+  const list = Array.isArray(products) ? products : [products];
+  const summary = await stockSummary(company._id, list.map((p) => p._id));
+  const out = list.map((p) => {
+    const { stock = 0, price = 0 } = summary.get(String(p._id)) || {};
+    return { ...p.toJSON(), stock, price, lowStock: stock <= (p.reorderLevel || 0), hasBatches: summary.has(String(p._id)) };
+  });
+  return Array.isArray(products) ? out : out[0];
+}
+
 export const productService = {
-  list: (company, { category } = {}) => Product.find({ company: company._id, ...(category ? { category: objectId(category, 'Category') } : {}) }).sort({ name: 1 }),
+  list: async (company, { category } = {}) => withStock(company, await Product.find({ company: company._id, ...(category ? { category: objectId(category, 'Category') } : {}) }).sort({ name: 1 })),
   get: async (company, id) => {
     const product = await getProduct(company, id);
     await product.populate('category');
-    return product;
+    return withStock(company, product);
   },
   create: async (company, body) => {
     const category = await getCategory(company, body?.category);
-    return applyProduct(new Product({ company: company._id }), category, body, company).save();
+    return withStock(company, await applyProduct(new Product({ company: company._id }), category, body, company).save());
   },
   /** A product can move to any of the company's categories; it takes on that category's type. */
   update: async (company, id, body) => {
     const product = await getProduct(company, id);
+    if (body?.isSerialized !== undefined && Boolean(body.isSerialized) !== product.isSerialized && (await Batch.exists({ product: product._id }))) {
+      throw conflict('Stock of this product has already been received, so its serial-number tracking can’t be changed');
+    }
     await applyProduct(product, await getCategory(company, body?.category ?? product.category), body, company).save();
     await product.populate('category');
-    return product;
+    return withStock(company, product);
   },
+  /** A product with stock history (batches, serial units, invoices that copied them) can't be deleted. */
   remove: async (company, id) => {
-    await (await getProduct(company, id)).deleteOne();
+    const product = await getProduct(company, id);
+    if (await Batch.exists({ product: product._id })) throw conflict('This product has stock received, so it can’t be deleted');
+    await product.deleteOne();
+    await deleteProductFiles([product]);
+  },
+  /** Keeps an uploaded PDF with the product (the file is already stored by uploadProductDocument). */
+  addDocument: async (company, id, file) => {
+    if (!file?.filename) throw badRequest('Choose a PDF to upload');
+    let product;
+    try {
+      product = await getProduct(company, id);
+      if (product.documents.length >= MAX_PRODUCT_DOCUMENTS) throw badRequest(`A product can keep up to ${MAX_PRODUCT_DOCUMENTS} PDFs. Remove one first`);
+      const name = String(file.originalname || '').replace(/\.pdf$/i, '').trim().slice(0, 200) || 'Document';
+      product.documents.push({ name, url: `/uploads/${file.filename}`, size: file.size });
+      await product.save();
+    } catch (e) {
+      await deleteFile(file.filename).catch(() => {}); // not kept: don't leave the stored file behind
+      throw e;
+    }
+    await product.populate('category');
+    return withStock(company, product);
+  },
+  removeDocument: async (company, id, docId) => {
+    const product = await getProduct(company, id);
+    const doc = product.documents.id(docId);
+    if (!doc) throw notFound('Document');
+    const filename = doc.url.replace(/^\/uploads\//, '');
+    doc.deleteOne();
+    await product.save();
+    await deleteFile(filename).catch(() => {});
+    await product.populate('category');
+    return withStock(company, product);
   },
 };
 
-/** Bulk import into a solar panel category (Excel/CSV parsed in the browser): same brand + model + watt updates, otherwise adds. */
+/** Bulk import into a solar panel category (Excel/CSV parsed in the browser): same brand + model + watt updates, otherwise adds. Prices and quantities in the sheet are ignored: stock is received as batches. */
 export async function importPanels(company, categoryId, items) {
   if (!company.features.excelImport) throw forbidden('Excel import is not enabled for your company');
   const category = await getCategory(company, categoryId);
@@ -220,7 +301,7 @@ export async function importPanels(company, categoryId, items) {
   let added = 0;
   let updated = 0;
   for (const raw of items.slice(0, 1000)) {
-    const item = pick(raw, FIELDS.panels.filter((f) => f !== 'name'));
+    const item = pick(raw, [...FIELDS.panels.filter((f) => f !== 'name'), 'warrantyYears', 'attributes']); // prices and stock come in as batches, not here
     for (const k of Object.keys(item)) if (item[k] === null || item[k] === '') delete item[k];
     const doc = byKey.get(keyOf(item));
     if (doc) {
@@ -238,11 +319,14 @@ export async function importPanels(company, categoryId, items) {
 /** What the designer consumes: panels, poles, categories with products, and pricing settings.
  * Packages are served separately from GET /api/packages. */
 export async function designerCatalog(company) {
-  const [categories, products, parents] = await Promise.all([
+  const [categories, products, parents, stock] = await Promise.all([
     Category.find({ company: company._id }).sort({ position: 1, createdAt: 1 }),
     Product.find({ company: company._id }).sort({ name: 1 }),
     ParentCategory.find({ company: company._id }).sort({ position: 1, createdAt: 1, _id: 1 }),
+    stockSummary(company._id),
   ]);
+  // the price a proposal quotes: the retail price of the batch FIFO sells next (see stockSummary)
+  const priceOf = (p) => stock.get(p.id)?.price || 0;
 
   // the parent category of every category, for the grouped bill of materials
   const parentById = new Map(parents.map((p, i) => [p.id, { parentId: p.id, parentName: p.name, parentOrder: i + 1 }]));
@@ -262,7 +346,8 @@ export async function designerCatalog(company) {
       name: p.name,
       brand: p.brand || '',
       model: p.model || '',
-      price: Number(p.price) || 0,
+      price: priceOf(p),
+      stock: stock.get(p.id)?.stock || 0,
       unit: capFirst(p.unit) || 'Nos',
       description: p.description || '',
       hsnCode: p.hsnCode || '',
@@ -288,21 +373,53 @@ export async function designerCatalog(company) {
     otherCostPerKw,
     panels: products
       .filter((p) => p.type === 'panels' && p.watts > 0 && p.length > 0 && p.width > 0)
-      .map((p) => ({ id: p.id, brand: p.brand || p.name, model: p.brand ? p.model : '', ...pick(p, ['watts', 'length', 'width', 'price', 'manufactureYear', 'warrantyYears', 'hsnCode', 'gstPercent']), ...groupOf(p) })),
+      .map((p) => ({ id: p.id, brand: p.brand || p.name, model: p.brand ? p.model : '', ...pick(p, ['watts', 'length', 'width', 'warrantyMonths', 'hsnCode', 'gstPercent']), price: priceOf(p), manufactureYear: stock.get(p.id)?.mfgYear || null, warrantyYears: Math.floor((p.warrantyMonths || 0) / 12), ...groupOf(p) })),
     pillars: products
       .filter((p) => p.type === 'poles')
-      .map((p) => ({ id: p.id, name: p.name, shape: p.shape, pricePerFt: p.price, ...pick(p, ['hsnCode', 'gstPercent']), ...groupOf(p) })),
+      .map((p) => ({ id: p.id, name: p.name, shape: p.shape, pricePerFt: priceOf(p), ...pick(p, ['hsnCode', 'gstPercent']), ...groupOf(p) })),
     parentCategories: parents.map((p, i) => ({ id: p.id, name: p.name, order: i + 1 })),
     materialCategories,
   };
 }
 
+/* ───────────── starter catalog ───────────── */
 
+/** Categories whose products are tracked per physical unit when a starter catalog creates them. */
+export const SERIALIZED_BY_DEFAULT = /panel|module|inverter|batter/i;
+export const OPENING_SUPPLIER = 'Opening stock';
 
+/** The supplier that opening-stock batches (stock entered before purchases were recorded) are filed under. */
+export function openingSupplier(companyId) {
+  return Supplier.findOneAndUpdate(
+    { company: companyId, name: OPENING_SUPPLIER },
+    { $setOnInsert: { company: companyId, name: OPENING_SUPPLIER, notes: 'Stock and prices entered before purchases were recorded' } },
+    { upsert: true, returnDocument: 'after' },
+  );
+}
+
+/**
+ * Starter product literals in a flat shape (price, quantity, warrantyYears, manufactureYear, specs) → products with
+ * attributes, each with one opening batch that holds its price as base, wholesale and retail price (and its
+ * quantity, unless it is tracked by serial number: those units need real serials, so the batch starts empty).
+ */
+export async function insertStarterProducts(companyId, items, categoryById) {
+  const supplier = await openingSupplier(companyId);
+  for (const { price = 0, quantity = 0, warrantyYears = 0, manufactureYear = null, specs = [], ...fields } of items) {
+    const category = categoryById.get(String(fields.category));
+    const product = await Product.create({
+      ...fields,
+      isSerialized: fields.isSerialized ?? SERIALIZED_BY_DEFAULT.test(category?.name || ''),
+      warrantyMonths: Math.round(warrantyYears * 12),
+      attributes: Object.fromEntries(specs.map((sp) => [attributeKey(sp.key), sp.value])),
+    });
+    const qty = product.isSerialized ? 0 : quantity;
+    await Batch.create({ company: companyId, product: product._id, supplier: supplier._id, mfgYear: manufactureYear, qtyReceived: qty, qtyRemaining: qty, purchasePrice: 0, basePrice: price, wholesalePrice: price, retailPrice: price, note: OPENING_SUPPLIER });
+  }
+}
 
 /** Starter catalog for a new company: all required categories populated with real solar equipment, plus turnkey packages. */
 export async function createStarterCatalog(companyId, { panels = DEFAULT_PANELS, pillars = DEFAULT_PILLARS } = {}) {
-  const categories = await Category.insertMany(DEFAULT_CATEGORIES.map((c, i) => ({ ...c, position: i + 1, company: companyId })));
+  const categories = await Category.insertMany(DEFAULT_CATEGORIES.map(({ specKeys, ...c }, i) => ({ ...c, attributes: textAttributes(specKeys), position: i + 1, company: companyId })));
 
   const catMap = new Map(categories.map((c) => [c.name, c._id]));
   const catTypeMap = new Map(categories.map((c) => [c.type, c._id]));
@@ -571,7 +688,7 @@ export async function createStarterCatalog(companyId, { panels = DEFAULT_PANELS,
     },
   ];
 
-  await Product.insertMany(productsToInsert);
+  await insertStarterProducts(companyId, productsToInsert, new Map(categories.map((c) => [String(c._id), c])));
   await seedParentCategories(companyId); // "Structures" and "Electricals", with the categories above filed under them
 
   // Sample turnkey packages (add catalog products to line items from Dashboard → Packages).

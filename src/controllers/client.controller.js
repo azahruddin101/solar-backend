@@ -1,7 +1,15 @@
 import * as clientService from '../services/client.service.js';
 
 export async function list(req, res) {
-  res.json(await clientService.listClients(req.company, { page: req.query.page, limit: req.query.limit }));
+  res.json(
+    await clientService.listClients(req.company, {
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      from: req.query.from,
+      to: req.query.to,
+    }),
+  );
 }
 
 export async function get(req, res) {
