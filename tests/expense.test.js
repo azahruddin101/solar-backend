@@ -6,6 +6,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { Client, Company, Design, Expense, ProjectBudget } from '../src/models/index.js';
 import { deleteDesign } from '../src/services/design.service.js';
 import * as expenses from '../src/services/expense.service.js';
+import { assertCanOpen, isProtected } from '../src/services/fileAccess.service.js';
 
 let server;
 let company;
@@ -27,6 +28,35 @@ beforeEach(async () => {
   const client = await Client.create({ company: company._id, name: 'Sunil Patil' });
   won = await Design.create({ company: company._id, client: client._id, name: 'Patil bungalow', status: 'won' });
   draft = await Design.create({ company: company._id, client: client._id, name: 'Still a draft', status: 'draft' });
+});
+
+test('each company maintains its own expense reasons', async () => {
+  assert.deepEqual(expenses.listReasons(company), expenses.expenseReasonsList(company));
+  assert.ok(expenses.listReasons(company).includes('Labour charges'));
+  const custom = await expenses.updateReasons(company, { reasons: ['Site fuel', 'Labour charges'] });
+  assert.deepEqual(custom, ['Site fuel', 'Labour charges']);
+  const other = await Company.create({ name: 'Other Co' });
+  assert.ok(!expenses.listReasons(other).includes('Site fuel'));
+  assert.ok(expenses.listReasons(other).includes('Transport of material'));
+});
+
+test('an expense can keep a vendor bill', async () => {
+  const e = await expenses.create(company, staff, won.id, { amount: 500, reason: 'Cable' });
+  assert.equal(e.billUrl, '');
+  const withBill = await expenses.attachBill(company, e.id, { filename: `${company.id}-expbill-${e.id}-abc.pdf`, originalname: 'invoice-42.pdf', size: 1200 });
+  assert.match(withBill.billUrl, /-expbill-/);
+  assert.equal(withBill.billName, 'invoice-42.pdf');
+  const replaced = await expenses.attachBill(company, e.id, { filename: `${company.id}-expbill-${e.id}-def.png`, originalname: 'scan.png', size: 800 });
+  assert.equal(replaced.billUrl.endsWith('def.png'), true);
+  const cleared = await expenses.removeBill(company, e.id);
+  assert.equal(cleared.billUrl, '');
+  await assert.rejects(expenses.attachBill(company, e.id, null), /Choose the bill/);
+  const name = `${company.id}-expbill-${e.id}-abc.pdf`;
+  assert.equal(isProtected(name), true);
+  const staffUser = (permissions) => ({ role: 'agent', company: company._id, permissions });
+  await assertCanOpen({ role: 'company', company: company._id }, name);
+  await assertCanOpen(staffUser(['expenses:view']), name);
+  await assert.rejects(assertCanOpen(staffUser(['clients:view']), name));
 });
 
 test('expenses add up per proposal, with who entered them', async () => {
@@ -119,4 +149,27 @@ test('profit & loss is budget minus expenses', async () => {
   const after = await expenses.analytics(company);
   assert.equal(after.totals.spent, 66000);
   assert.equal(after.totals.profit, -200);
+});
+
+test('a booked proposal is budgeted at its price until someone sets a budget; removing that goes back to the price', async () => {
+  const priced = await Design.create({ company: company._id, client: won.client, name: 'Priced', status: 'won', summary: { cost: 200000 } });
+  await expenses.create(company, staff, priced.id, { amount: 50000, reason: 'Material purchase' });
+  let res = await expenses.listForDesign(company, priced.id);
+  assert.deepEqual([res.budget.amount, res.budget.source, res.budgetUsed, res.profit], [200000, 'proposal', 25, 150000]);
+  let row = (await expenses.overview(company)).items.find((r) => r.id === priced.id);
+  assert.deepEqual([row.budget, row.budgetSource, row.profit], [200000, 'proposal', 150000]);
+
+  await expenses.setBudget(company, staff, priced.id, { amount: 180000, note: 'Tighter' });
+  res = await expenses.listForDesign(company, priced.id);
+  assert.deepEqual([res.budget.amount, res.budget.source, res.profit], [180000, 'set', 130000]);
+  row = (await expenses.overview(company)).items.find((r) => r.id === priced.id);
+  assert.equal(row.budgetSource, 'set');
+
+  await expenses.removeBudget(company, priced.id);
+  res = await expenses.listForDesign(company, priced.id);
+  assert.deepEqual([res.budget.amount, res.budget.source], [200000, 'proposal']);
+
+  // a draft, or a booked proposal with no price yet, has no budget on its own
+  const unpriced = await Design.create({ company: company._id, client: won.client, name: 'Unpriced', status: 'won' });
+  assert.equal((await expenses.listForDesign(company, unpriced.id)).budget, null);
 });

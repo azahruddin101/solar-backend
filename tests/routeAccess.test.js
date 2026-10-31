@@ -25,7 +25,7 @@ const SELF_SERVICE = [/^\/api\/auth\//, /^\/api\/notifications(\/|$)/, /^\/api\/
 
 test('the route walk finds the API', () => {
   assert.ok(all.length > 100, `only ${all.length} routes found`);
-  assert.ok(all.some((r) => r.path === '/api/billing/designs/:id/payments'));
+  assert.ok(all.some((r) => r.path === '/api/billing/invoices/from-bills'));
 });
 
 test('every API route is gated by a role or a permission', () => {
@@ -40,10 +40,19 @@ test('nothing outside the public list is reachable without signing in', () => {
 
 test('finance actions are separate permissions', () => {
   const gate = (method, path) => all.find((r) => r.method === method && r.path === path)?.chain.map((fn) => fn.authorizes).filter(Boolean);
-  assert.ok(gate('POST', '/api/billing/designs/:id/payments').includes('permission:finances:create_receipt'));
-  assert.ok(gate('POST', '/api/billing/designs/:id/invoice').includes('permission:finances:create_invoice'));
-  assert.ok(gate('POST', '/api/billing/invoices').includes('permission:finances:create_invoice'));
-  assert.ok(gate('DELETE', '/api/billing/payments/:id').includes('permission:finances:remove_receipt'));
+  // invoices come only from bills: there is no invoice straight from a proposal and no direct invoice
+  assert.equal(all.some((r) => r.path === '/api/billing/designs/:id/invoice'), false);
+  assert.equal(all.some((r) => r.method === 'POST' && r.path === '/api/billing/invoices'), false);
+  // the sale chain: each document has its own permission, reading them is Finances › View
+  // voiding takes a payment off the books and reopens goods: the company owner only, not a staff permission
+  assert.ok(gate('POST', '/api/billing/bills/:id/void').some((g) => /role/.test(g) && /company/.test(g)));
+  assert.ok(gate('POST', '/api/billing/bills/:id/credit-notes').some((g) => /role/.test(g) && /company/.test(g))); // goods back on a bill: the owner too
+  assert.ok(gate('POST', '/api/billing/invoices/:id/void').some((g) => /role/.test(g) && /company/.test(g)));
+  assert.ok(gate('POST', '/api/billing/eway-bills').includes('permission:finances:create_eway_bill'));
+  assert.ok(gate('POST', '/api/billing/eway-bills/:id/cancel').includes('permission:finances:create_eway_bill'));
+  assert.ok(gate('POST', '/api/billing/bills').includes('permission:finances:create_bill'));
+  assert.ok(gate('POST', '/api/billing/invoices/from-bills').includes('permission:finances:create_invoice'));
+  assert.ok(gate('GET', '/api/billing/bills/uninvoiced').includes('permission:finances:view'));
 });
 
 test('masters, staff and roles are owner-only', () => {

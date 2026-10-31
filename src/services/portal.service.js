@@ -1,6 +1,7 @@
-// What a signed-in client may see: their own proposals (never drafts), the price breakdown, and their payments.
+// What a signed-in client may see: their own proposals (never drafts), the price breakdown, their bills and invoices.
 // Clients may respond to proposals that are in “proposed” status (accept / reject / request changes).
-import { Client, Design, Invoice, Payment, Project } from '../models/index.js';
+import { Bill, Client, Design, Invoice, Payment, Project } from '../models/index.js';
+import { toApiJSONList } from '../utils/lean.js';
 import {
   amcKind,
   amcRequestRow,
@@ -40,9 +41,10 @@ const proposalRow = (d) => ({
   createdAt: d.createdAt,
   summary: { address: d.summary?.address, kwp: d.summary?.kwp, panels: d.summary?.panels, annualKwh: d.summary?.annualKwh, cost: d.summary?.cost },
   total: totalOf(d),
+  subsidy: d.subsidy?.enabled ? { enabled: true, central: d.subsidy.central || 0, state: d.subsidy.state || 0 } : null,
   clientResponse: clientResponseRow(d),
   reviewInvite: reviewInviteRow(d),
-  canRespond: d.status === 'proposed' && !d.clientResponse?.decision,
+  canRespond: OPEN_DESIGN_STATUS.includes(d.status) && !d.clientResponse?.decision,
 });
 
 export async function me(user) {
@@ -99,7 +101,7 @@ async function clientAmcVisits(user, designId) {
 }
 
 function clientMayChooseAmcPackages(design) {
-  return design.status === 'proposed' || design.status === 'won';
+  return OPEN_DESIGN_STATUS.includes(design.status) || design.status === 'won';
 }
 
 /**
@@ -173,9 +175,10 @@ export async function submitAmcRequest(user, designId, body) {
 export async function getProposal(user, id) {
   const design = await Design.findOne({ _id: objectId(id, 'Proposal'), company: user.company, client: user.client, status: VISIBLE }).select('-data -logs');
   if (!design) throw notFound('Proposal');
-  const [payments, invoice, client, amc, amcPackages] = await Promise.all([
+  const [payments, bills, invoice, client, amc, amcPackages] = await Promise.all([
     Payment.find({ company: user.company, design: design._id }).sort({ createdAt: 1 }),
-    Invoice.findOne({ company: user.company, design: design._id }).sort({ createdAt: -1 }),
+    Bill.find({ company: user.company, design: design._id, status: { $ne: 'void' } }).sort({ createdAt: 1 }).populate('ewayBills', 'ewayNo issuedOn total').populate('invoice', 'invoiceNo').lean(),
+    Invoice.findOne({ company: user.company, design: design._id, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' } }).sort({ createdAt: -1 }),
     me(user),
     clientAmcVisits(user, design._id),
     amcPackagesView(user, design),
@@ -189,6 +192,7 @@ export async function getProposal(user, id) {
     paid,
     balance: design.status === 'won' ? money(total - paid) : null,
     payments,
+    bills: toApiJSONList(bills),
     invoice,
     amc,
     amcPackages,
@@ -218,7 +222,7 @@ export async function respondToProposal(user, id, { decision, note }) {
     _id: objectId(id, 'Proposal'),
     company: user.company,
     client: user.client,
-    status: 'proposed',
+    status: { $in: OPEN_DESIGN_STATUS },
   });
   if (!design) throw badRequest('This proposal is not open for a response right now.');
   if (design.clientResponse?.decision) throw badRequest('You have already responded to this proposal. Contact your provider if you need to change your answer.');

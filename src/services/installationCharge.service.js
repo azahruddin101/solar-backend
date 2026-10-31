@@ -3,7 +3,7 @@ import { badRequest, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
 
-const FIELDS = ['name', 'description', 'defaultPrice', 'gstPercent'];
+const FIELDS = ['name', 'description', 'defaultPrice', 'gstPercent', 'sac'];
 const MAX_CHARGES = 100;
 const collation = { locale: 'en', strength: 2 };
 
@@ -12,6 +12,7 @@ function clean(body) {
   if (!String(data.name ?? '').trim()) throw badRequest('Charge name is required');
   if (data.defaultPrice !== undefined) data.defaultPrice = Math.max(0, Number(data.defaultPrice) || 0);
   if (data.gstPercent !== undefined) data.gstPercent = Math.max(0, Math.min(100, Number(data.gstPercent ?? 18) || 18));
+  if (data.sac !== undefined) data.sac = String(data.sac ?? '').replace(/\D/g, '').slice(0, 8);
   return data;
 }
 

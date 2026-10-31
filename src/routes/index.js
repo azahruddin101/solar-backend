@@ -10,6 +10,7 @@ import authRoutes from './auth.routes.js';
 import { catalogRoutes, categoryRoutes, parentCategoryRoutes, productRoutes } from './catalog.routes.js';
 import clientRoutes from './client.routes.js';
 import loanRoutes from './loan.routes.js';
+import subsidyRoutes from './subsidy.routes.js';
 import expenseRoutes from './expense.routes.js';
 import companyRoutes from './company.routes.js';
 import designRoutes from './design.routes.js';
@@ -43,6 +44,7 @@ router.use('/company', authenticate, companyRoutes);
 router.use('/clients', withAreaAccess('clients'), clientRoutes);
 router.use('/expenses', withAreaAccess('expenses'), expenseRoutes); // what was spent on each proposal's project
 router.use('/loans', withAreaAccess('loans'), loanRoutes); // clients buying with a loan, and the company's loan step template
+router.use('/subsidies', withAreaAccess('subsidies'), subsidyRoutes); // proposals with a government subsidy, and the company's subsidy step template
 router.use('/categories', withAreaAccess('proposals', 'inventory'), categoryRoutes); // read for the designer; writes need 'inventory' (see catalog.routes.js)
 router.use('/parent-categories', withAreaAccess('inventory'), parentCategoryRoutes);
 router.use('/products', withAreaAccess('proposals', 'inventory', 'finances', 'tasks'), productRoutes); // read for the designer, invoices and installations; writes need 'inventory'

@@ -14,6 +14,7 @@ const login = permissionOnly('clients', 'manage_login');
 
 router.get('/', view, clients.list);
 router.get('/:id', view, clients.get);
+router.get('/:id/overview', view, clients.overview); // everything about this client: proposals, installations, money, loans, AMC, support
 router.post('/upload-document', permissionOnly('clients', 'create', 'update'), uploadDocument, clients.uploadDoc);
 router.post('/', create, validate(S.clientSchema), clients.create);
 router.put('/:id', update, validate(S.clientUpdateSchema), clients.update);

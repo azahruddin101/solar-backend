@@ -1,6 +1,6 @@
 // What a staff (agent) account may do in its company workspace, beyond the installation steps assigned to it.
 //
-// A permission is `<area>:<action>`, e.g. "finances:create_receipt". Staff get permissions through named roles the
+// A permission is `<area>:<action>`, e.g. "finances:create_bill". Staff get permissions through named roles the
 // owner defines (e.g. "Accountant", reused across people) plus optional extra grants on one person; their effective
 // permissions are the union, resolved on every request (services/permission.service.js), so a change applies at once.
 //
@@ -53,12 +53,12 @@ export const PERMISSION_CATALOG = {
   },
   finances: {
     label: 'Finances',
-    description: 'Invoices, payments and receipts',
+    description: 'E-way bills, bills (payments) and invoices',
     actions: {
       view: 'View',
+      create_eway_bill: 'Create e-way bill',
+      create_bill: 'Create bill',
       create_invoice: 'Create invoice',
-      create_receipt: 'Record payment',
-      remove_receipt: 'Remove receipt',
     },
   },
   inventory: {
@@ -119,11 +119,19 @@ export const PERMISSION_CATALOG = {
       update: 'Update loan & steps',
     },
   },
+  subsidies: {
+    label: 'Subsidies',
+    description: 'Proposals with a government subsidy, and their progress through the subsidy steps',
+    actions: {
+      view: 'View',
+      update: 'Update subsidy & steps',
+    },
+  },
 };
 
 export const PERMISSION_AREAS = Object.keys(PERMISSION_CATALOG);
 
-/** Every valid permission string, e.g. "finances:create_receipt". */
+/** Every valid permission string, e.g. "finances:create_bill". */
 export const STAFF_PERMISSIONS = PERMISSION_AREAS.flatMap((area) => Object.keys(PERMISSION_CATALOG[area].actions).map((action) => `${area}:${action}`));
 
 const VALID = new Set(STAFF_PERMISSIONS);
@@ -173,26 +181,26 @@ export const ROLE_TEMPLATES = [
   {
     key: 'accountant',
     name: 'Accountant',
-    description: 'Issues invoices and records payments.',
-    permissions: ['finances:view', 'finances:create_invoice', 'finances:create_receipt', 'finances:remove_receipt', 'clients:view', 'proposals:view'],
+    description: 'Makes e-way bills, bills and invoices.',
+    permissions: ['finances:view', 'finances:create_eway_bill', 'finances:create_bill', 'finances:create_invoice', 'clients:view', 'proposals:view'],
   },
   {
     key: 'cashier',
     name: 'Cashier',
-    description: 'Records payments and gives receipts — no invoices.',
-    permissions: ['finances:view', 'finances:create_receipt'],
+    description: 'Takes payments on bills — no e-way bills or invoices.',
+    permissions: ['finances:view', 'finances:create_bill'],
   },
   {
     key: 'invoicing',
     name: 'Invoicing clerk',
-    description: 'Issues invoices — no payments.',
-    permissions: ['finances:view', 'finances:create_invoice'],
+    description: 'Makes e-way bills and invoices — no payments.',
+    permissions: ['finances:view', 'finances:create_eway_bill', 'finances:create_invoice'],
   },
   {
     key: 'storekeeper',
     name: 'Store keeper',
-    description: 'Maintains products, packages and installation charges.',
-    permissions: ['inventory:view', 'inventory:create', 'inventory:update'],
+    description: 'Maintains products, packages and installation charges, and sends goods out on e-way bills.',
+    permissions: ['inventory:view', 'inventory:create', 'inventory:update', 'finances:view', 'finances:create_eway_bill'],
   },
   {
     key: 'supervisor',
@@ -216,9 +224,9 @@ export const LEGACY_PERMISSION_MAP = {
   'clients:update': ['clients:update', 'clients:manage_login'],
   'clients:delete': ['clients:delete'],
   'billing:view': ['finances:view'],
-  'billing:create': ['finances:create_invoice', 'finances:create_receipt'],
+  'billing:create': ['finances:create_invoice'],
   'billing:update': [],
-  'billing:delete': ['finances:remove_receipt'],
+  'billing:delete': [],
   'installations:view': ['tasks:view'],
   'installations:create': ['tasks:create'],
   'installations:update': ['tasks:update', 'tasks:assign', 'tasks:change_status'],
@@ -239,19 +247,26 @@ export const LEGACY_PERMISSION_MAP = {
  *  - v1 (no version): the old names, see LEGACY_PERMISSION_MAP.
  *  - v2 → v3: "Edit" used to include changing a proposal's status and client, and assigning installation steps and
  *    updating their status; those became their own actions, given to everyone who had "Edit".
+ *  - v3 → v4: invoices used to be made straight from a proposal; now goods go out on an e-way bill and are paid on a
+ *    bill first, so whoever could create invoices can also create e-way bills and bills.
+ *  - v4 → v5: receipts were removed (a bill is the payment), so "Record payment" and "Remove receipt" are dropped.
  */
-export const PERMISSIONS_VERSION = 3;
+export const PERMISSIONS_VERSION = 5;
 
 const V3_SPLITS = {
   'proposals:update': ['proposals:change_status', 'proposals:change_client'],
   'tasks:update': ['tasks:assign', 'tasks:change_status'],
+};
+const V4_SPLITS = {
+  'finances:create_invoice': ['finances:create_eway_bill', 'finances:create_bill'],
 };
 
 /** A permission list saved at `version` (1 = before versions existed) → the current names, with the same access. */
 export function upgradePermissions(list, version = 1) {
   let out = version < 2 ? migrateLegacyPermissions(list) : [...new Set((Array.isArray(list) ? list : []).filter((p) => VALID.has(p)))];
   if (version < 3) out = [...new Set([...out, ...out.flatMap((p) => V3_SPLITS[p] || [])])];
-  return out.sort();
+  if (version < 4) out = [...new Set([...out, ...out.flatMap((p) => V4_SPLITS[p] || [])])];
+  return out.filter((p) => VALID.has(p)).sort(); // names dropped since (v5: the receipt actions) fall away
 }
 
 /**

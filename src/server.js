@@ -8,6 +8,8 @@ import { ensureSessionTtlIndex } from './migrations/authSessionTtl.migration.js'
 import { capUnlimitedLimits } from './migrations/limits.migration.js';
 import { fixShareTokenIndex } from './migrations/shareToken.migration.js';
 import { migrateLoans } from './migrations/loan.migration.js';
+import { migrateSubsidies } from './migrations/subsidy.migration.js';
+import { markAmcPartsInvoices } from './migrations/invoiceKind.migration.js';
 import { migrateParentCategories } from './migrations/parentCategory.migration.js';
 import { migratePlanRequests } from './migrations/planRequest.migration.js';
 import { capitalizeClientNames, capitalizeProductNames, capitalizeProductUnits } from './migrations/unitCase.migration.js';
@@ -54,6 +56,8 @@ await migrateParentCategories();
 await migratePlanRequests();
 await fixShareTokenIndex();
 await migrateLoans();
+await migrateSubsidies();
+await markAmcPartsInvoices();
 await capUnlimitedLimits();
 await ensureSessionTtlIndex();
 await migrateStaffPermissions();

@@ -32,6 +32,12 @@ const designSchema = new mongoose.Schema(
     roofType: { type: String, enum: [...CLIENT_ROOF_TYPES, ''], default: '' },
     cleaningFrequency: { type: Number, default: 0, min: 0, max: 365 }, // cleanings per year
     cleaningCharge: { type: Number, default: 0, min: 0 }, // price per cleaning visit
+    // government subsidy the client can claim on this system: the central (PM Surya Ghar) and state amounts
+    subsidy: {
+      enabled: { type: Boolean, default: false },
+      central: { type: Number, default: 0, min: 0 },
+      state: { type: Number, default: 0, min: 0 },
+    },
     clientResponse: {
       decision: { type: String, enum: CLIENT_PROPOSAL_DECISION },
       note: { type: String, trim: true, maxlength: 2000 },

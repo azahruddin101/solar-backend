@@ -4,6 +4,8 @@ const ManualLead = require('../models/ManualLead');
 const MetaLeadStatus = require('../models/MetaLeadStatus');
 const { buildSearchText } = require('../utils/leadSearchText');
 const { readPriorityFilter, priorityCondition } = require('../utils/leadPriority');
+const { readScheduledAt, scheduleCondition, rescheduleUpdate, statusLogEntry } = require('../utils/leadSchedule');
+const { applyLeadAssignments, heldByCondition } = require('../utils/leadAssignment');
 const { leadCompanyFilter, companyObjectId } = require('../utils/tenant');
 const { assignedScope } = require('../utils/leadScope');
 const { FIXED_KEYS, FIELD_TYPE_LABEL, formOf, cleanLeadValues, valueText } = require('../utils/leadForm');
@@ -54,7 +56,15 @@ const serialize = (lead) => ({
   convertedAt: lead.convertedAt || null,
   convertedByName: lead.convertedByName || '',
   currentStatus: lead.status ? { _id: lead.status._id || lead.status, name: lead.statusName, color: lead.statusColor } : null,
-  statusHistory: (lead.statusHistory || []).map((e) => ({ statusName: e.statusName, statusColor: e.statusColor, remark: e.remark, changedAt: e.changedAt, changedByName: e.changedByName || '' })),
+  scheduledAt: lead.scheduledAt || null,
+  rescheduledCount: lead.rescheduledCount || 0,
+  isRescheduled: Boolean(lead.isRescheduled),
+  isReassigned: Boolean(lead.isReassigned),
+  reassignedCount: lead.reassignedCount || 0,
+  assignmentHistory: (lead.assignmentHistory || []).map((h) => ({ id: h.assignee ? String(h.assignee) : null, name: h.assigneeName || '', assignedAt: h.assignedAt, endedAt: h.endedAt || null, byName: h.byName || '' })),
+  logs: (lead.logs || []).map((l) => ({ action: l.action, message: l.message || '', byName: l.byName || '', at: l.at })),
+  previousSchedules: (lead.previousSchedules || []).map((p) => ({ scheduledAt: p.scheduledAt, statusName: p.statusName || '', replacedAt: p.replacedAt, byName: p.byName || '' })),
+  statusHistory: (lead.statusHistory || []).map((e) => ({ statusName: e.statusName, statusColor: e.statusColor, remark: e.remark, scheduledAt: e.scheduledAt || null, rescheduled: Boolean(e.rescheduled), changedAt: e.changedAt, changedByName: e.changedByName || '' })),
 });
 
 /** 400 with the first problem as the message and every problem by field key (the form shows them per field). */
@@ -77,6 +87,8 @@ const listManualLeads = async (req, res) => {
     await applyLeadSearch(filter, { companyId: req.leadsCompanyId, search, kind: 'manual' });
     const assignedTo = text(req.query.assignedTo);
     if (assignedTo === 'unassigned') filter.assignedTo = null;
+    else if (assignedTo === 'reassigned') filter.isReassigned = true; // handed from one person to another
+    else if (isObjectId(assignedTo) && text(req.query.includePast) === '1') Object.assign(filter, heldByCondition(assignedTo, { includePast: true }));
     else if (isObjectId(assignedTo)) filter.assignedTo = assignedTo;
     const statusId = text(req.query.statusId);
     if (statusId === 'none') filter.status = null;
@@ -86,6 +98,7 @@ const listManualLeads = async (req, res) => {
     const { priority, invalid: badPriority } = readPriorityFilter(req.query.priority);
     if (badPriority) return res.status(400).json({ message: 'Invalid filter' });
     if (priority !== null) filter.isPriority = priorityCondition(priority);
+    Object.assign(filter, scheduleCondition(req.query.schedule) || {});
     const from = text(req.query.from);
     const to = text(req.query.to);
     if ((from && !Number.isNaN(Date.parse(from))) || (to && !Number.isNaN(Date.parse(to)))) {
@@ -172,16 +185,19 @@ const updateManualLeadStatus = async (req, res) => {
   try {
     const status = await MetaLeadStatus.findOne({ ...leadCompanyFilter(req.leadsCompanyId), _id: body.statusId, isActive: true, isDeleted: { $ne: true } }).lean();
     if (!status) return res.status(404).json({ message: 'Status not found' });
-    const existing = await ManualLead.findOne(scope(req, { _id: req.params.id, isDeleted: false })).select('convertedClient status').lean();
+    const { scheduledAt, error: dateError } = readScheduledAt(body, status);
+    if (dateError) return res.status(400).json({ message: dateError });
+    const existing = await ManualLead.findOne(scope(req, { _id: req.params.id, isDeleted: false })).select('convertedClient status scheduledAt rescheduledCount').lean();
     if (!existing) return res.status(404).json({ message: 'Lead not found' });
     const lock = await assertLeadStatusMutable(req.leadsCompanyId, existing);
     if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
     const now = new Date();
+    const move = rescheduleUpdate(existing, scheduledAt, { statusName: status.name, byName: req.user.name || req.user.email || '', at: now });
     const lead = await ManualLead.findOneAndUpdate(
       scope(req, { _id: req.params.id, isDeleted: false }),
       {
-        $set: { status: status._id, statusName: status.name, statusColor: status.color, statusUpdatedAt: now },
-        $push: { statusHistory: { status: status._id, statusName: status.name, statusColor: status.color, remark, changedBy: req.user._id, changedByName: req.user.name || req.user.email || '', changedAt: now } },
+        $set: { status: status._id, statusName: status.name, statusColor: status.color, statusUpdatedAt: now, scheduledAt, ...move.set },
+        $push: { ...move.push, logs: statusLogEntry({ status, scheduledAt, remark, rescheduled: move.rescheduled, byName: req.user.name || req.user.email || '', at: now }), statusHistory: { status: status._id, statusName: status.name, statusColor: status.color, remark, scheduledAt, rescheduled: move.rescheduled, changedBy: req.user._id, changedByName: req.user.name || req.user.email || '', changedAt: now } },
       },
       { new: true }
     ).populate('assignedTo', 'name').lean();
@@ -204,17 +220,13 @@ const assignManualLeads = async (req, res) => {
   const assignee = targetId ? (req.leadsAssignee && String(req.leadsAssignee._id) === String(targetId) ? req.leadsAssignee : null) : null;
   if (targetId && !assignee) return res.status(404).json({ message: 'Staff member not found, inactive, or not allowed to work on leads' });
   try {
-    const leads = await ManualLead.find(scope(req, { _id: { $in: leadIds }, isDeleted: false })).select('_id assignedTo convertedClient status').lean();
+    const leads = await ManualLead.find(scope(req, { _id: { $in: leadIds }, isDeleted: false })).select('_id assignedTo assignedAt assignmentHistory convertedClient status').populate('assignedTo', 'name email').lean();
     const target = assignee ? String(assignee._id) : '';
-    const toChange = leads.filter((l) => String(l.assignedTo || '') !== target);
+    const toChange = leads.filter((l) => String(l.assignedTo?._id || '') !== target);
     const lock = await assertLeadsAssignmentMutable(req.leadsCompanyId, toChange);
     if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
     const change = toChange.map((l) => l._id);
-    if (change.length) {
-      const where = { ...leadCompanyFilter(req.leadsCompanyId), _id: { $in: change } };
-      if (assignee) await ManualLead.updateMany(where, { $set: { assignedTo: assignee._id, assignedAt: new Date() } });
-      else await ManualLead.updateMany(where, { $unset: { assignedTo: 1, assignedAt: 1 } });
-    }
+    await applyLeadAssignments(ManualLead, leadCompanyFilter(req.leadsCompanyId), toChange, assignee, req.user); // history, flags and log per lead
     res.json({ message: assignee ? `${change.length} lead(s) assigned to ${assignee.name}` : `${change.length} lead(s) unassigned`, assigned: change.length, unchanged: leads.length - change.length, notFound: leadIds.length - leads.length });
   } catch (error) {
     fail(res, error, 'Could not assign the leads');

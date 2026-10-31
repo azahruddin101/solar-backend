@@ -11,6 +11,7 @@ const installationChargeSchema = new mongoose.Schema(
     description: text(300),
     defaultPrice: { type: Number, default: 0, min: 0 },
     gstPercent: { type: Number, default: 18, min: 0, max: 100 },
+    sac: text(8), // Services Accounting Code printed in the HSN/SAC column of bills and invoices (optional)
   },
   schemaOptions,
 );

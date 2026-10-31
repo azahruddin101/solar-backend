@@ -9,6 +9,7 @@ export async function list(req, res) {
       limit: req.query.limit,
       from: req.query.from,
       to: req.query.to,
+      show: req.query.show,
     }),
   );
 }

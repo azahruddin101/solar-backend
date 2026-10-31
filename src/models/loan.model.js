@@ -37,7 +37,17 @@ const loanSchema = new mongoose.Schema(
     client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true, index: true },
     status: { type: String, enum: LOAN_STATUS, default: 'in_progress' },
     lender: text(120),
+    branch: text(120),
+    ifsc: text(20),
+    accountRef: text(60), // the bank's application / account reference
     amount: { type: Number, min: 0, default: null },
+    interestRate: { type: Number, min: 0, max: 100, default: null }, // % per year
+    tenureMonths: { type: Number, min: 0, max: 600, default: null },
+    emi: { type: Number, min: 0, default: null }, // per month
+    downPayment: { type: Number, min: 0, default: null },
+    processingFee: { type: Number, min: 0, default: null },
+    sanctionedOn: { type: Date, default: null },
+    disbursedOn: { type: Date, default: null },
     notes: text(1000),
     steps: [loanStepSchema],
     logs: [activityLogSchema],

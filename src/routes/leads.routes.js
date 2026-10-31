@@ -66,6 +66,7 @@ router.get('/assignees', permissionOnly('leads', 'assign', 'view_all'), async (r
 });
 router.get('/export', exportLeads, rateLimit({ name: 'lead-export', windowMs: 60 * 60 * 1000, max: 20 }), h.exportLeads);
 router.get('/all', view, h.allList);
+router.get('/board', view, h.board); // the Kanban: the same leads, a column per status
 
 // Manual leads: added on the company's own lead form (Manage Masters → Lead form) or imported from a sheet
 router.get('/form', view, h.manual.getLeadForm);

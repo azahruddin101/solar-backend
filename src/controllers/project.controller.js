@@ -78,6 +78,14 @@ export async function amcVisits(req, res) {
   res.json(await listAmcVisits(req.company));
 }
 
+export async function stepBoard(req, res) {
+  res.json(await projectService.stepBoard(req.company));
+}
+
+export async function stepBoardMine(req, res) {
+  res.json(await projectService.stepBoard({ _id: req.user.company }, { agentId: req.user._id }));
+}
+
 export async function amcVisitsMine(req, res) {
   res.json(await listAmcVisits({ _id: req.user.company }, { agentId: req.user._id }));
 }
@@ -100,6 +108,7 @@ export async function list(req, res) {
     limit: req.query.limit,
     from: req.query.from,
     to: req.query.to,
+    show: req.query.show,
   }));
 }
 

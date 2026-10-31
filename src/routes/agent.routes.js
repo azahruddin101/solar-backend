@@ -8,6 +8,7 @@ const router = Router();
 
 router.get('/', agents.list);
 router.get('/analytics', agents.analytics);
+router.get('/:id/overview', agents.overview);
 router.post('/', validate(S.agentCreateSchema), agents.create);
 router.put('/:id', validate(S.agentUpdateSchema), agents.update);
 router.post('/:id/photo', uploadAgentPhoto, agents.uploadPhoto);

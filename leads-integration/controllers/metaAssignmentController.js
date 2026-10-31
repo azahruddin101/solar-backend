@@ -12,6 +12,8 @@ const { logMetaEvent, logMetaError } = require('../utils/metaLogger');
 const { startRegistrationForMetaLead, startRegistrationForInboxLead } = require('./registrationController');
 const { detailFields, sourceLabelFor } = require('./inboxLeadController');
 const { readPriorityFilter, priorityCondition } = require('../utils/leadPriority');
+const { readScheduledAt, rescheduleUpdate, statusLogEntry } = require('../utils/leadSchedule');
+const { applyLeadAssignments } = require('../utils/leadAssignment');
 const { companyObjectId, leadCompanyFilter } = require('../utils/tenant');
 const { assignedScope } = require('../utils/leadScope');
 const { assertLeadStatusMutable, assertLeadsAssignmentMutable } = require('../utils/leadStatusLock');
@@ -122,6 +124,7 @@ const serializeStatus = (status) => ({
   order: status.order,
   outcome: status.outcome || 'open',
   isConversion: status.isConversion,
+  requiresDate: Boolean(status.requiresDate),
   isActive: status.isActive,
 });
 
@@ -145,6 +148,7 @@ const readStatusInput = (body, { partial = false } = {}) => {
     input.isConversion = body.outcome === 'converted';
   }
   if (body.isActive !== undefined) input.isActive = body.isActive === true;
+  if (body.requiresDate !== undefined) input.requiresDate = body.requiresDate === true;
 
   return { input, error: errors[0] || null };
 };
@@ -317,12 +321,13 @@ const assignMetaLeads = async (req, res) => {
     const leads = await MetaLead.find(
       tenantFilter(req, { _id: { $in: leadIds }, processingStatus: 'processed', isDeleted: false, ...assignedScope(req) })
     )
-      .select('_id assignedTo convertedClient adminStatus')
+      .select('_id assignedTo assignedAt assignmentHistory convertedClient adminStatus')
+      .populate('assignedTo', 'name email')
       .lean();
 
     // Leads that already belong to the requested telecaller are left as they are
     const targetId = telecaller ? String(telecaller._id) : '';
-    const toChange = leads.filter((lead) => String(lead.assignedTo || '') !== targetId);
+    const toChange = leads.filter((lead) => String(lead.assignedTo?._id || '') !== targetId);
     const changeIds = toChange.map((lead) => lead._id);
     if (changeIds.length) {
       const assignments = await MetaLeadAssignment.find(tenantFilter(req, { lead: { $in: changeIds }, isActive: true }))
@@ -362,10 +367,8 @@ const assignMetaLeads = async (req, res) => {
           })),
           { ordered: false }
         );
-        await MetaLead.updateMany(tenantFilter(req, { _id: { $in: changeIds } }), { $set: { assignedTo: telecaller._id, assignedAt: now } });
-      } else {
-        await MetaLead.updateMany(tenantFilter(req, { _id: { $in: changeIds } }), { $unset: { assignedTo: 1, assignedAt: 1 } });
       }
+      await applyLeadAssignments(MetaLead, tenantFilter(req), toChange, telecaller, req.user, now); // history, flags and log per lead
     }
 
     logMetaEvent('META_LEADS_ASSIGNED', {
@@ -395,11 +398,13 @@ const serializeHistory = (history) =>
     statusName: entry.statusName,
     statusColor: entry.statusColor,
     remark: entry.remark,
+    scheduledAt: entry.scheduledAt || null,
+    rescheduled: Boolean(entry.rescheduled),
     changedAt: entry.changedAt,
   }));
 
 const serializeCurrentStatus = (status) =>
-  status ? { _id: status._id, name: status.name, color: status.color, isConversion: status.isConversion } : null;
+  status ? { _id: status._id, name: status.name, color: status.color, isConversion: status.isConversion, requiresDate: Boolean(status.requiresDate) } : null;
 
 // @desc    Every telecaller's work on one lead (each telecaller has a separate status track)
 // @route   GET /api/integrations/meta/leads/:id/assignments
@@ -942,9 +947,11 @@ const updateMetaLeadStatus = async (req, res) => {
   try {
     const status = await MetaLeadStatus.findOne(tenantFilter(req, { _id: body.statusId, isActive: true, isDeleted: false }));
     if (!status) return res.status(400).json({ message: 'This status is no longer available' });
+    const { scheduledAt, error: dateError } = readScheduledAt(body, status);
+    if (dateError) return res.status(400).json({ message: dateError });
 
     const metaLead = await MetaLead.findOne(tenantFilter(req, { _id: req.params.id, isDeleted: { $ne: true }, ...assignedScope(req) }))
-      .select('convertedClient adminStatus')
+      .select('convertedClient adminStatus scheduledAt rescheduledCount')
       .lean();
     if (!metaLead) return res.status(404).json({ message: 'Lead not found' });
 
@@ -959,11 +966,14 @@ const updateMetaLeadStatus = async (req, res) => {
     if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
 
     const now = new Date();
+    const move = rescheduleUpdate(metaLead, scheduledAt, { statusName: status.name, byName: req.user.name || req.user.email || '', at: now });
     const historyEntry = {
       status: status._id,
       statusName: status.name,
       statusColor: status.color,
       remark,
+      scheduledAt,
+      rescheduled: move.rescheduled,
       changedAt: now,
     };
     const assignment = await MetaLeadAssignment.findOneAndUpdate(
@@ -986,8 +996,8 @@ const updateMetaLeadStatus = async (req, res) => {
       const updated = await MetaLead.findOneAndUpdate(
         tenantFilter(req, { _id: req.params.id, isDeleted: { $ne: true } }),
         {
-          $set: { adminStatus: status._id, adminStatusUpdatedAt: now },
-          $push: { adminStatusHistory: historyEntry },
+          $set: { adminStatus: status._id, adminStatusUpdatedAt: now, scheduledAt, ...move.set },
+          $push: { ...move.push, logs: statusLogEntry({ status, scheduledAt, remark, rescheduled: move.rescheduled, byName: req.user.name || req.user.email || '', at: now }), adminStatusHistory: historyEntry },
         },
         { returnDocument: 'after' }
       ).populate('adminStatus', 'name color isConversion');
@@ -1009,6 +1019,7 @@ const updateMetaLeadStatus = async (req, res) => {
       });
     }
 
+    await MetaLead.updateOne(tenantFilter(req, { _id: req.params.id }), { $set: { scheduledAt, ...move.set }, $push: { ...move.push, logs: statusLogEntry({ status, scheduledAt, remark, rescheduled: move.rescheduled, byName: req.user.name || req.user.email || '', at: now }) } });
     logMetaEvent('META_LEAD_STATUS_UPDATED', {
       userId: String(req.user._id),
       assignmentId: String(assignment._id),
@@ -1041,6 +1052,8 @@ const updateMyMetaLeadStatus = async (req, res) => {
   try {
     const status = await MetaLeadStatus.findOne(tenantFilter(req, { _id: body.statusId, isActive: true, isDeleted: false }));
     if (!status) return res.status(400).json({ message: 'This status is no longer available' });
+    const { scheduledAt, error: dateError } = readScheduledAt(body, status);
+    if (dateError) return res.status(400).json({ message: dateError });
 
     const owned = await MetaLeadAssignment.findOne(tenantFilter(req, {
       _id: req.params.id,
@@ -1057,7 +1070,7 @@ const updateMyMetaLeadStatus = async (req, res) => {
       return res.status(404).json({ message: 'Lead not found' });
     }
 
-    const metaLead = await MetaLead.findOne(tenantFilter(req, { _id: owned.lead })).select('convertedClient').lean();
+    const metaLead = await MetaLead.findOne(tenantFilter(req, { _id: owned.lead })).select('convertedClient scheduledAt rescheduledCount').lean();
     const lock = await assertLeadStatusMutable(req.leadsCompanyId, {
       convertedClient: metaLead?.convertedClient,
       currentStatus: owned.currentStatus,
@@ -1084,11 +1097,14 @@ const updateMyMetaLeadStatus = async (req, res) => {
     }
 
     const now = new Date();
+    const move = rescheduleUpdate(metaLead, scheduledAt, { statusName: status.name, byName: req.user.name || req.user.email || '', at: now });
     const statusChange = {
       status: status._id,
       statusName: status.name,
       statusColor: status.color,
       remark,
+      scheduledAt,
+      rescheduled: move.rescheduled,
       changedAt: now,
     };
     // Opening the form must not mark the lead registered until the form is submitted.
@@ -1128,6 +1144,7 @@ const updateMyMetaLeadStatus = async (req, res) => {
       return res.status(404).json({ message: 'Lead not found' });
     }
 
+    if (!deferStatus) await MetaLead.updateOne(tenantFilter(req, { _id: owned.lead }), { $set: { scheduledAt, ...move.set }, $push: { ...move.push, logs: statusLogEntry({ status, scheduledAt, remark, rescheduled: move.rescheduled, byName: req.user.name || req.user.email || '', at: now }) } });
     logMetaEvent('META_LEAD_STATUS_UPDATED', {
       userId: String(req.user._id),
       assignmentId: String(assignment._id),

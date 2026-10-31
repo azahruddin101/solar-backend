@@ -5,7 +5,9 @@
 import mongoose from 'mongoose';
 import { DEFAULT_INSTALLATION_STEPS, ROLES } from '../constants/index.js';
 import { Client, Company, Design, Notification, Package, Plan, Project, SerialUnit, Ticket, User } from '../models/index.js';
+import { billService } from '../services/bill.service.js';
 import { billingService } from '../services/billing.service.js';
+import { ewayBillService } from '../services/ewayBill.service.js';
 import { applyPlanLimitsToCompany } from '../services/plan.service.js';
 import { deleteCompany } from '../services/company.service.js';
 import { putFile } from '../services/storage.service.js';
@@ -156,11 +158,17 @@ export async function seedShowcase({ replace = false } = {}) {
     return { productId: product.id, serials: units.map((u) => u.serialNo) };
   };
   const battery = await stockLine('BAT-EX-150', 2);
-  await billingService.createDirectInvoice(company, owner, {
-    billTo: { name: 'Kale Agro Services', phone: '9822045566', address: 'Hadapsar, Pune 411028' },
-    title: 'Counter sale – inverter batteries',
-    pricing: { lines: [{ name: 'Exide 12 V 150 Ah solar tubular battery', ...battery, priceType: 'retail', rate: 0 }, { name: 'Battery installation & wiring', qty: 1, unit: 'Nos', rate: 1500, gstPercent: 18 }], gstIncluded: false, withGst: true, invoiceGstMode: 'with_gst' },
+  // a walk-in buyer with no proposal: e-way bill (stock out) → bill (paid) → invoice, like any sale
+  const kale = await Client.create({ company: company._id, name: 'Kale Agro Services', phone: '9822045566', address: 'Hadapsar, Pune 411028' });
+  const sold = await ewayBillService.create(company, owner, { client: kale.id, lines: [{ ...battery, priceType: 'retail' }], withGst: true });
+  await billService.create(company, owner, {
+    client: kale.id,
+    ewayBills: [sold.id],
+    services: [{ name: 'Battery installation & wiring', qty: 1, unit: 'Nos', rate: 1500, gstPercent: 18 }],
+    withGst: true,
+    payment: { mode: 'upi', reference: 'UPI-COUNTER-1' },
   });
+  await billingService.createInvoiceFromBills(company, owner, { client: kale.id });
 
   /* support tickets (need a super admin to answer) */
   const admin = await User.findOne({ role: ROLES.SUPERADMIN });

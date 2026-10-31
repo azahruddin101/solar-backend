@@ -86,9 +86,10 @@ async function searchFilter(user, q) {
 
 /* ───────────── reads ───────────── */
 
-export async function listClientTickets(user, { status, q, client, page, limit } = {}) {
+export async function listClientTickets(user, { status, q, client, page, limit, unread } = {}) {
   const filter = scopeOf(user);
   if (TICKET_STATUS.includes(status)) filter.status = status;
+  if (unread === '1' || unread === 'true') filter[unreadField(user)] = { $gt: 0 }; // only requests with messages this person hasn't opened
   if (!isClient(user) && client && mongoose.isValidObjectId(client)) filter.client = client;
   const search = await searchFilter(user, q);
   if (search) Object.assign(filter, search);

@@ -6,7 +6,7 @@
 // is one; a local mongod must be started with --replSet (see backend/.env.example).
 import mongoose from 'mongoose';
 import { PRICE_TYPES, UNIT_TRANSITIONS } from '../constants/index.js';
-import { Batch, Invoice, Product, Project, SerialUnit, Supplier } from '../models/index.js';
+import { Batch, EwayBill, Invoice, Product, Project, SerialUnit, Supplier } from '../models/index.js';
 import { warrantyEndDate } from '../models/serialUnit.model.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { deleteFile } from './storage.service.js';
@@ -192,8 +192,10 @@ export async function deductStock(company, product, { qty, batch, serials } = {}
  * and is priced from the batch at the chosen price type; it becomes one line per batch used, carrying copies of the
  * batch number, serials, price type and rate, so editing the batch later never changes the invoice. Lines without
  * a product (labour, charges…) pass through unchanged.
+ * The sold units point at the document that took them: an invoice (`invoiceId`) or an e-way bill (`ewayBillId`,
+ * the invoice follows later — billing.service.js createInvoiceFromBills fills in `soldInvoice` then).
  */
-export async function allocateInvoiceLines(company, lines, { invoiceId, session }) {
+export async function allocateInvoiceLines(company, lines, { invoiceId = null, ewayBillId = null, session }) {
   const out = [];
   for (const line of lines || []) {
     if (!line?.productId) {
@@ -202,7 +204,7 @@ export async function allocateInvoiceLines(company, lines, { invoiceId, session 
     }
     const product = await ownProduct(company, line.productId, session);
     if (!PRICE_TYPES.includes(line.priceType)) throw badRequest(`Choose the base, wholesale or retail price for ${product.name}`);
-    const allocations = await deductStock(company, product, line, session, { status: 'sold', soldInvoice: invoiceId });
+    const allocations = await deductStock(company, product, line, session, { status: 'sold', soldInvoice: invoiceId, soldEwayBill: ewayBillId });
     for (const a of allocations) {
       out.push({
         ...line,
@@ -224,6 +226,31 @@ export async function allocateInvoiceLines(company, lines, { invoiceId, session 
   return out;
 }
 
+/**
+ * Put the stock of a cancelled e-way bill back: each line's quantity returns to the batch it came from, and its
+ * serial units (still `sold` on this e-way bill) go back in stock, counted one by one. Runs inside the cancelling transaction.
+ */
+export async function returnStock(company, lines, { ewayBillId, session }) {
+  if (!session) throw new Error('returnStock must run inside a transaction');
+  for (const line of lines || []) {
+    if (!line?.productId || !line.batch) continue;
+    const batchId = objectId(line.batch, 'Batch');
+    const serials = Array.isArray(line.serials) ? line.serials : [];
+    let qty = Number(line.qty) || 0;
+    if (serials.length) {
+      // a serialized line: only the units that are still sold on this e-way bill come back, and the batch gets back
+      // exactly that many, so its count never exceeds the units really in stock
+      const restored = await SerialUnit.updateMany(
+        { company: company._id, soldEwayBill: ewayBillId, serialNo: { $in: serials }, status: 'sold' },
+        { $set: { status: 'inStock', soldEwayBill: null, soldInvoice: null } },
+        { session },
+      );
+      qty = restored.modifiedCount;
+    }
+    if (qty > 0) await Batch.updateOne({ _id: batchId, company: company._id }, { $inc: { qtyRemaining: qty } }, { session });
+  }
+}
+
 /* ───────────── serial units ───────────── */
 
 /** Throws unless a unit may move from `from` to `to` (constants UNIT_TRANSITIONS). */
@@ -243,6 +270,11 @@ export async function setUnitStatus(company, unitId, body = {}) {
     if (!unit) throw notFound('Unit');
     assertTransition(unit.status, to);
     if (unit.status === 'inStock') throw badRequest('Sell it on an invoice instead');
+    if (unit.soldEwayBill) {
+      // while its e-way bill is open the unit still belongs to it: cancelling must be able to put it back in stock
+      const ewayBill = await EwayBill.findOne({ _id: unit.soldEwayBill, company: company._id }).select('ewayNo status').session(session).lean();
+      if (ewayBill?.status === 'open') throw conflict(`This unit is on e-way bill ${ewayBill.ewayNo}, which is still open. Bill it or cancel it first`);
+    }
     const set = { status: to };
     if (to === 'installed') {
       const project = await Project.findOne({ _id: objectId(body.project, 'Installation'), company: company._id }).select('_id').session(session);
@@ -251,7 +283,7 @@ export async function setUnitStatus(company, unitId, body = {}) {
       if (Number.isNaN(installDate.getTime())) throw badRequest('Invalid install date');
       Object.assign(set, { installedProject: project._id, installDate });
     }
-    if (to === 'inStock') Object.assign(set, { soldInvoice: null, installedProject: null, installDate: null });
+    if (to === 'inStock') Object.assign(set, { soldInvoice: null, soldEwayBill: null, installedProject: null, installDate: null });
     const updated = await SerialUnit.findOneAndUpdate({ _id: unit._id, status: unit.status }, { $set: set }, { session, returnDocument: 'after' });
     if (!updated) throw conflict('This unit was just changed. Refresh and try again');
     if (to === 'inStock') await Batch.updateOne({ _id: unit.batch }, { $inc: { qtyRemaining: 1 } }, { session });
@@ -332,6 +364,9 @@ export async function findUnit(company, serialNo) {
     .populate({ path: 'installedProject', select: 'design client', populate: [{ path: 'design', select: 'name' }, { path: 'client', select: 'name' }] })
     .lean();
   if (!unit) throw notFound('Unit');
-  const invoice = unit.soldInvoice ? await Invoice.findById(unit.soldInvoice).select('invoiceNo issuedOn').lean() : null;
-  return { ...unitJSON(unit, unit.product?.warrantyMonths), soldInvoice: toApiJSON(invoice) };
+  const [invoice, ewayBill] = await Promise.all([
+    unit.soldInvoice ? Invoice.findById(unit.soldInvoice).select('invoiceNo issuedOn').lean() : null,
+    unit.soldEwayBill ? EwayBill.findById(unit.soldEwayBill).select('ewayNo issuedOn').lean() : null,
+  ]);
+  return { ...unitJSON(unit, unit.product?.warrantyMonths), soldInvoice: toApiJSON(invoice), soldEwayBill: toApiJSON(ewayBill) };
 }

@@ -83,7 +83,7 @@ const permissionsOf = (user) => user?.effectivePermissions ?? user?.permissions 
 
 /**
  * True for the company owner, or a staff (agent) account holding `<area>:<action>` through one of its roles or an
- * extra grant (e.g. `hasPermission(user, 'finances', 'create_receipt')`). See constants/permissions.js.
+ * extra grant (e.g. `hasPermission(user, 'finances', 'create_bill')`). See constants/permissions.js.
  */
 export const hasPermission = (user, area, action) => user?.role === ROLES.COMPANY || (user?.role === ROLES.AGENT && permissionsOf(user).includes(`${area}:${action}`));
 

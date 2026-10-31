@@ -4,6 +4,7 @@ import { validate } from '../middlewares/validate.middleware.js';
 import * as S from '../validation/schemas.js';
 import * as portal from '../services/portal.service.js';
 import { listMyLoans } from '../services/loan.service.js';
+import { listMySubsidies } from '../services/subsidy.service.js';
 import * as tickets from '../controllers/clientTicket.controller.js';
 import { uploadClientTicketFiles } from '../middlewares/upload.middleware.js';
 
@@ -23,6 +24,7 @@ router.post('/proposals/:id/amc-requests', validate(S.portalAmcRequestSchema), w
 router.post('/proposals/:id/response', validate(S.portalProposalResponseSchema), wrap((req) => portal.respondToProposal(req.user, req.params.id, req.body)));
 router.get('/proposals/:id/design', wrap((req) => portal.getDesignData(req.user, req.params.id)));
 router.get('/loans', wrap((req) => listMyLoans(req.user))); // the loans on their own proposals, with their steps
+router.get('/subsidies', wrap((req) => listMySubsidies(req.user))); // the subsidies on their own proposals, with their steps
 router.get('/catalog', wrap((req) => portal.viewerCatalog(req.user)));
 
 // Help & support: the client's own requests to their solar company (never the company's tickets with the platform)

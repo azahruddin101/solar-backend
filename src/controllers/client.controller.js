@@ -1,4 +1,5 @@
 import * as clientService from '../services/client.service.js';
+import { clientOverview } from '../services/clientOverview.service.js';
 
 export async function list(req, res) {
   res.json(
@@ -14,6 +15,10 @@ export async function list(req, res) {
 
 export async function get(req, res) {
   res.json(await clientService.getClientView(req.company, req.params.id));
+}
+
+export async function overview(req, res) {
+  res.json(await clientOverview(req.company, req.user, req.params.id));
 }
 
 export async function create(req, res) {

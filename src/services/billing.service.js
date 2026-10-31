@@ -1,23 +1,23 @@
-// Receipts and tax invoices for booked proposals (each invoice generation is stored separately).
+// The proposal's and the client's money ledgers, the invoice that settles bills (the sale chain: ewayBill.service.js →
+// bill.service.js → here) and the invoice for parts used on an AMC visit. Invoices are never made straight from a
+// proposal: they come from paid bills.
 import mongoose from 'mongoose';
-import { Batch, Client, Counter, Design, Invoice, Payment, Product, Project } from '../models/index.js';
+import { Bill, Client, Design, Invoice, Payment, SerialUnit } from '../models/index.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { parsePagination, toApiJSON, toApiJSONList } from '../utils/lean.js';
 import { dateRangeOnField } from '../utils/listFilters.js';
 import { cleanRichText } from '../utils/richText.js';
+import { cleanIdempotencyKey, createOnce } from '../utils/idempotency.js';
 import { objectId } from '../utils/validators.js';
 import { createNumberedInvoice, peekInvoiceNo } from './invoiceNumber.service.js';
-import { authorityInvoicePricing, resolveInvoicePricing } from './invoicePricing.service.js';
-import { revokeSharesForPdf } from './fileShare.service.js';
-import { deleteFile } from './storage.service.js';
+import { authorityInvoicePricing, consolidatePricing } from './invoicePricing.service.js';
+import { billService } from './bill.service.js';
+import { creditNoteService } from './creditNote.service.js';
+import { ewayBillService, partyFilter, resolveParty } from './ewayBill.service.js';
+import { archivePdfOnce } from './archivePdf.service.js';
 import { allocateInvoiceLines, inTransaction } from './stock.service.js';
 
 const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
-
-async function nextNumber(company, key, prefix) {
-  const c = await Counter.findOneAndUpdate({ company: company._id, key }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: 'after' });
-  return `${prefix}-${String(c.seq).padStart(4, '0')}`;
-}
 
 async function getDesign(company, id) {
   const design = await Design.findOne({ _id: objectId(id, 'Proposal'), company: company._id }).populate('client');
@@ -34,6 +34,8 @@ async function ledger(company, design) {
   const total = totalOf(design);
   const paid = money(payments.reduce((a, p) => a + p.amount, 0));
   const invoiceRows = toApiJSONList(invoices);
+  const party = { design };
+  const [ewayBills, bills, creditNotes] = await Promise.all([ewayBillService.forParty(company, party), billService.forParty(company, party), creditNoteService.forParty(company, party)]);
   return {
     design: {
       id: design.id,
@@ -47,9 +49,20 @@ async function ledger(company, design) {
     total,
     paid,
     balance: money(total - paid),
-    payments: toApiJSONList(payments),
     invoices: invoiceRows,
-    invoice: invoiceRows[0] || null,
+    invoice: invoiceRows.find((i) => i.status !== 'void' && i.kind !== 'amc_parts') || null, // the latest sale invoice that still stands
+    ...chainSummary(ewayBills, bills),
+    creditNotes,
+  };
+}
+
+/** The e-way bills and bills of a party, with the counts the billing page's buttons need. */
+function chainSummary(ewayBills, bills) {
+  return {
+    ewayBills,
+    bills,
+    openEwayBills: ewayBills.filter((e) => e.status === 'open').length,
+    uninvoicedBills: bills.filter((b) => b.status === 'paid').length,
   };
 }
 
@@ -70,37 +83,14 @@ export function cleanInvoiceDetails(input) {
  * Creates the invoice and takes the stock of its product lines in one transaction: either both happen or neither.
  * `pricingFor(lines)` turns the stock-allocated lines into the stored pricing (totals recomputed on the server).
  */
-async function issueInvoice(company, inputLines, pricingFor, fields) {
-  return inTransaction(async (session) => {
+async function issueInvoice(company, inputLines, pricingFor, fields, { session: outer = null } = {}) {
+  const run = async (session) => {
     const invoiceId = new mongoose.Types.ObjectId(); // the sold units point at it
     const lines = await allocateInvoiceLines(company, inputLines, { invoiceId, session });
     const pricing = pricingFor(lines);
     return createNumberedInvoice(company, { _id: invoiceId, ...fields, total: money(pricing.total), pricing }, { session });
-  });
-}
-
-/**
- * Stores the PDF of an issued invoice or receipt — once. The archived PDF is the document the client was given, so it
- * is never replaced or deleted afterwards (a second upload is refused and its file removed). The check and the write
- * are one atomic update, so two uploads at the same moment can't both win.
- */
-async function archivePdfOnce(Model, what, company, id, pdfName) {
-  let filter;
-  try {
-    filter = { _id: objectId(id, what), company: company._id };
-  } catch (e) {
-    await deleteFile(pdfName).catch(() => {});
-    throw e;
-  }
-  const stored = await Model.findOneAndUpdate(
-    { ...filter, $or: [{ pdfName: '' }, { pdfName: null }, { pdfName: { $exists: false } }] },
-    { $set: { pdfName } },
-    { new: true },
-  );
-  if (stored) return { ok: true, pdfName };
-  await deleteFile(pdfName).catch(() => {});
-  if (!(await Model.exists(filter))) throw notFound(what);
-  throw conflict(`This ${what.toLowerCase()} already has its PDF archived. Issued documents can't be replaced.`);
+  };
+  return outer ? run(outer) : inTransaction(run); // an outer transaction lets the caller record the invoice in the same commit
 }
 
 export const billingService = {
@@ -108,8 +98,8 @@ export const billingService = {
   async overview(company, { from, to } = {}) {
     const match = { company: company._id, status: 'won', ...(dateRangeOnField('createdAt', from, to) || {}) };
     const designs = await Design.find(match).select('-data').populate('client', 'name phone email').sort({ updatedAt: -1 });
-    const sums = await Payment.aggregate([{ $match: { company: company._id, design: { $in: designs.map((d) => d._id) } } }, { $group: { _id: '$design', paid: { $sum: '$amount' }, count: { $sum: 1 } } }]);
-    const invoices = await Invoice.find({ company: company._id, design: { $in: designs.map((d) => d._id) } }).select('design invoiceNo createdAt').sort({ createdAt: -1 });
+    const sums = await Payment.aggregate([{ $match: { company: company._id, design: { $in: designs.map((d) => d._id) } } }, { $group: { _id: '$design', paid: { $sum: '$amount' }, count: { $sum: 1 }, lastPaidOn: { $max: '$receivedOn' } } }]);
+    const invoices = await Invoice.find({ company: company._id, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $in: designs.map((d) => d._id) } }).select('design invoiceNo createdAt').sort({ createdAt: -1 });
     const latestInv = new Map();
     for (const inv of invoices) {
       const k = String(inv.design);
@@ -120,46 +110,10 @@ export const billingService = {
       const total = totalOf(d);
       const paid = money(s?.paid);
       const inv = latestInv.get(String(d._id));
-      return { id: d.id, name: d.name, type: d.type, client: d.client, total, paid, balance: money(total - paid), receipts: s?.count || 0, invoiceNo: inv?.invoiceNo || '' };
+      return { id: d.id, name: d.name, type: d.type, client: d.client, total, paid, balance: money(total - paid), payments: s?.count || 0, invoiceNo: inv?.invoiceNo || '', lastPaidOn: s?.lastPaidOn || null, bookedOn: d.updatedAt };
     });
   },
 
-  async listPayments(company, { page, limit, from, to } = {}) {
-    const match = { company: company._id, ...(dateRangeOnField('receivedOn', from, to) || {}) };
-    const { page: p, limit: l, skip } = parsePagination({ page, limit });
-    const [facet] = await Payment.aggregate([
-      { $match: match },
-      { $sort: { createdAt: -1 } },
-      {
-        $lookup: {
-          from: 'clients',
-          localField: 'client',
-          foreignField: '_id',
-          as: 'client',
-          pipeline: [{ $project: { name: 1 } }],
-        },
-      },
-      { $unwind: { path: '$client', preserveNullAndEmptyArrays: true } },
-      {
-        $lookup: {
-          from: 'designs',
-          localField: 'design',
-          foreignField: '_id',
-          as: 'design',
-          pipeline: [{ $project: { name: 1 } }],
-        },
-      },
-      { $unwind: { path: '$design', preserveNullAndEmptyArrays: true } },
-      {
-        $facet: {
-          meta: [{ $count: 'total' }],
-          rows: [{ $skip: skip }, { $limit: l }],
-        },
-      },
-    ]);
-    const total = facet?.meta?.[0]?.total ?? 0;
-    return { items: toApiJSONList(facet?.rows ?? []), total, page: p, limit: l };
-  },
   async listInvoices(company, { page, limit, from, to } = {}) {
     const match = { company: company._id, ...(dateRangeOnField('issuedOn', from, to) || {}) };
     const { page: p, limit: l, skip } = parsePagination({ page, limit });
@@ -191,121 +145,11 @@ export const billingService = {
     const design = await getDesign(company, designId);
     const result = await ledger(company, design);
     // Get the most recent invoice's T&C for pre-filling the form
-    const latestInvoice = await Invoice.findOne({ company: company._id, design: design._id }).sort({ createdAt: -1 }).lean();
+    const latestInvoice = await Invoice.findOne({ company: company._id, design: design._id, kind: { $ne: 'amc_parts' } }).sort({ createdAt: -1 }).lean();
     result.previousTermsAndConditions = latestInvoice?.termsAndConditions || '';
     result.previousBillToCompany = latestInvoice?.billToCompany || '';
     result.nextInvoiceNo = await peekInvoiceNo(company);
     return result;
-  },
-
-  async addPayment(company, user, designId, body) {
-    const design = await getDesign(company, designId);
-    if (design.status !== 'won') throw badRequest('Receipts can be created only after the proposal is marked as Booked');
-    const { total, balance } = await ledger(company, design);
-    if (!(total > 0)) throw badRequest('This proposal has no price yet');
-    const amount = money(body.amount);
-    if (!(amount > 0)) throw badRequest('Enter the amount received');
-    if (amount > balance + 0.001) throw badRequest(`The amount is more than the balance due (${balance})`);
-    const receivedOn = body.receivedOn ? new Date(body.receivedOn) : new Date();
-    if (Number.isNaN(receivedOn.getTime())) throw badRequest('Invalid payment date');
-    const payment = await Payment.create({
-      company: company._id,
-      design: design._id,
-      client: design.client._id,
-      receiptNo: await nextNumber(company, 'receipt', 'RCT'),
-      amount,
-      mode: body.mode,
-      reference: body.reference || '',
-      receivedOn,
-      note: body.note || '',
-      contractTotal: total,
-      balanceAfter: money(balance - amount),
-      createdByName: user?.name || user?.email || '',
-    });
-    return { payment, ...(await ledger(company, design)) };
-  },
-
-  /** Standalone receipt (no proposal): payer in `billTo`, optional link to an existing client. */
-  async createDirectReceipt(company, user, body = {}) {
-    const amount = money(body.amount);
-    if (!(amount > 0)) throw badRequest('Enter the amount received');
-    const billTo = {
-      name: String(body.billTo?.name || '').trim(),
-      phone: body.billTo?.phone || '',
-      email: body.billTo?.email || '',
-      address: body.billTo?.address || '',
-    };
-    if (!billTo.name) throw badRequest('Enter who the payment is from');
-    let clientId = null;
-    if (body.client) {
-      const client = await Client.findOne({ _id: objectId(body.client, 'Client'), company: company._id }).select('_id').lean();
-      if (!client) throw notFound('Client');
-      clientId = client._id;
-    }
-    const receivedOn = body.receivedOn ? new Date(body.receivedOn) : new Date();
-    if (Number.isNaN(receivedOn.getTime())) throw badRequest('Invalid payment date');
-    const payment = await Payment.create({
-      company: company._id,
-      design: null,
-      client: clientId,
-      billTo,
-      title: String(body.title || '').trim() || billTo.name,
-      receiptNo: await nextNumber(company, 'receipt', 'RCT'),
-      amount,
-      mode: body.mode,
-      reference: body.reference || '',
-      receivedOn,
-      note: body.note || '',
-      contractTotal: amount,
-      balanceAfter: 0,
-      createdByName: user?.name || user?.email || '',
-    });
-    return { payment: toApiJSON(payment.toObject()) };
-  },
-
-  /** Only the latest receipt can be cancelled. */
-  async removePayment(company, id) {
-    const payment = await Payment.findOne({ _id: objectId(id, 'Receipt'), company: company._id });
-    if (!payment) throw notFound('Receipt');
-    const later = await Payment.exists({ design: payment.design, createdAt: { $gt: payment.createdAt } });
-    if (later) throw badRequest('Only the latest receipt can be removed');
-    if (payment.pdfName) {
-      await revokeSharesForPdf(payment.pdfName);
-      await deleteFile(payment.pdfName);
-    }
-    await payment.deleteOne();
-    return { ok: true };
-  },
-
-  async attachReceiptPdf(company, paymentId, pdfName) {
-    if (!pdfName) throw badRequest('Upload a PDF');
-    return archivePdfOnce(Payment, 'Receipt', company, paymentId, pdfName);
-  },
-
-  async createInvoice(company, user, designId, body = {}) {
-    const design = await getDesign(company, designId);
-    const l = await ledger(company, design);
-    if (design.status !== 'won') throw badRequest('The proposal must be Booked');
-    if (!(l.total > 0)) throw badRequest('This proposal has no price yet');
-    const input = body.pricing && typeof body.pricing === 'object' ? body.pricing : design.summary?.pricing;
-    const pricingFor = (lines) => {
-      const pricing = resolveInvoicePricing(body.pricing ? { ...body.pricing, lines } : null, input?.lines?.length ? { ...input, lines } : design.summary?.pricing);
-      if (!pricing) throw badRequest('This proposal has no price yet');
-      if (!(money(pricing.total) > 0)) throw badRequest('Invoice total must be greater than zero');
-      return pricing;
-    };
-    const created = await issueInvoice(company, input?.lines || [], pricingFor, {
-      company: company._id,
-      design: design._id,
-      client: design.client._id,
-      title: design.name,
-      billToCompany: String(body.billToCompany || '').trim().slice(0, 120),
-      details: cleanInvoiceDetails(body.details),
-      termsAndConditions: cleanRichText(body.termsAndConditions || ''),
-      createdByName: user?.name || user?.email || '',
-    });
-    const out = await ledger(company, design);
-    return { ...out, createdInvoice: toApiJSON(created.toObject()) };
   },
 
   /** The number the next invoice (of any kind) will get. */
@@ -314,45 +158,11 @@ export const billingService = {
   },
 
   /**
-   * An invoice without a proposal: the buyer is typed in (`billTo`), optionally linked to an existing client, and the
-   * lines come straight from the form. Nothing else is created — no client record, no proposal.
-   */
-  async createDirectInvoice(company, user, body = {}) {
-    // stock lines are priced from their batches inside the transaction; the totals are checked there
-    if (!Array.isArray(body.pricing?.lines) || !body.pricing.lines.some((l) => String(l?.name || '').trim())) throw badRequest('Add at least one line item');
-    const billTo = {
-      name: String(body.billTo?.name || '').trim(),
-      company: String(body.billTo?.company || '').trim().slice(0, 120),
-      phone: body.billTo?.phone || '',
-      email: body.billTo?.email || '',
-      address: body.billTo?.address || '',
-      gstNumber: body.billTo?.gstNumber || '',
-    };
-    if (!billTo.name) throw badRequest('Enter who the invoice is for');
-    let clientId = null;
-    if (body.client) {
-      const client = await Client.findOne({ _id: objectId(body.client, 'Client'), company: company._id }).select('_id').lean();
-      if (!client) throw notFound('Client');
-      clientId = client._id;
-    }
-    const created = await issueInvoice(company, body.pricing.lines, (lines) => authorityInvoicePricing({ ...body.pricing, lines }), {
-      company: company._id,
-      design: null,
-      client: clientId,
-      billTo,
-      title: String(body.title || '').trim() || billTo.name,
-      details: cleanInvoiceDetails(body.details),
-      termsAndConditions: cleanRichText(body.termsAndConditions || ''),
-      createdByName: user?.name || user?.email || '',
-    });
-    return { createdInvoice: toApiJSON(created.toObject()) };
-  },
-
-  /**
    * Parts replaced on an AMC visit, billed to the proposal's client: one invoice on the proposal whose lines are taken
-   * from stock and priced from their batches at the chosen price type. project.service records it on the visit.
+   * from stock and priced from their batches at the chosen price type. project.service records it on the visit, inside
+   * the `session` it passes, so the invoice, the stock and the visit are one commit.
    */
-  async createAmcPartsInvoice(company, user, { project, visit, lines, withGst = true }) {
+  async createAmcPartsInvoice(company, user, { project, visit, lines, withGst = true, session = null }) {
     const design = await Design.findOne({ _id: project.design, company: company._id }).select('name client');
     if (!design) throw notFound('Proposal');
     const input = (lines || []).map((l) => ({ productId: l.productId, qty: l.qty, batch: l.batch, serials: l.serials, priceType: l.priceType || 'retail', name: '', rate: 0 }));
@@ -362,8 +172,115 @@ export const billingService = {
       design: design._id,
       client: design.client,
       title: `${visit.name} — parts used · ${design.name}`.slice(0, 160),
+      kind: 'amc_parts',
       termsAndConditions: cleanRichText(company.pdfTerms || ''),
       createdByName: user?.name || user?.email || '',
+    }, { session });
+  },
+
+  /**
+   * A client's money with no proposal: e-way bills, bills and invoices made on the client alone (the
+   * proposal-less sale chain). Same shape as `get` so the billing page can show either.
+   */
+  async getClient(company, clientId) {
+    const client = await Client.findOne({ _id: objectId(clientId, 'Client'), company: company._id }).select('name phone email address gstNumber').lean();
+    if (!client) throw notFound('Client');
+    const party = { client, design: null };
+    const [payments, invoices, ewayBills, bills, creditNotes] = await Promise.all([
+      Payment.find({ company: company._id, ...partyFilter(party) }).sort({ createdAt: 1 }).lean(),
+      Invoice.find({ company: company._id, ...partyFilter(party) }).sort({ createdAt: -1 }).lean(),
+      ewayBillService.forParty(company, party),
+      billService.forParty(company, party),
+      creditNoteService.forParty(company, party),
+    ]);
+    const invoiceRows = toApiJSONList(invoices);
+    const paid = money(payments.reduce((a, p) => a + p.amount, 0));
+    const billed = money(bills.reduce((a, b) => a + b.total, 0));
+    return {
+      client: toApiJSON(client),
+      total: billed,
+      paid,
+      balance: money(billed - paid),
+      invoices: invoiceRows,
+      invoice: invoiceRows.find((i) => i.status !== 'void' && i.kind !== 'amc_parts') || null,
+      previousTermsAndConditions: invoices[0]?.termsAndConditions || '',
+      previousBillToCompany: invoices[0]?.billToCompany || invoices[0]?.billTo?.company || '',
+      nextInvoiceNo: await peekInvoiceNo(company),
+      ...chainSummary(ewayBills, bills),
+      creditNotes,
+    };
+  },
+
+  /**
+   * The invoice that settles bills: every paid, not yet invoiced bill of a proposal (or client) goes on it, and the
+   * invoice takes their frozen lines and totals as they are (invoicePricing.service.js consolidatePricing). In one
+   * transaction the bills are marked invoiced and the sold units get the invoice they were sold on. `body.bills`
+   * (ids) may narrow it to some of those bills.
+   */
+  async createInvoiceFromBills(company, user, body = {}) {
+    const wantIds = [...new Set((Array.isArray(body.bills) ? body.bills : []).map((id) => String(id)))];
+    const idempotencyKey = cleanIdempotencyKey(body.idempotencyKey);
+    return createOnce(Invoice, company, idempotencyKey, async () => {
+      const created = await inTransaction(async (session) => {
+        const party = await resolveParty(company, body, session);
+        const bills = await Bill.find({ company: company._id, ...partyFilter(party), ...(wantIds.length ? { _id: { $in: wantIds.map((id) => objectId(id, 'Bill')) } } : { status: 'paid' }) }).sort({ createdAt: 1 }).populate('ewayBills', 'ewayNo').session(session).lean();
+        if (wantIds.length && bills.length !== wantIds.length) throw notFound('Bill');
+        if (!bills.length) throw badRequest('There is no paid bill to invoice yet');
+        const done = bills.filter((b) => b.status !== 'paid');
+        if (done.length) throw conflict(`${done.map((b) => b.billNo).join(', ')} ${done.length === 1 ? 'is' : 'are'} already invoiced`);
+        const pricing = consolidatePricing(bills);
+        if (!(money(pricing.total) > 0)) throw badRequest('Invoice total must be greater than zero');
+        const invoiceId = new mongoose.Types.ObjectId();
+        const marked = await Bill.updateMany({ _id: { $in: bills.map((b) => b._id) }, status: 'paid' }, { $set: { status: 'invoiced', invoice: invoiceId } }, { session });
+        if (marked.modifiedCount !== bills.length) throw conflict('One of these bills was just invoiced. Refresh and try again');
+        const ewayBillIds = bills.flatMap((b) => (b.ewayBills || []).map((e) => e._id));
+        if (ewayBillIds.length) await SerialUnit.updateMany({ company: company._id, soldEwayBill: { $in: ewayBillIds } }, { $set: { soldInvoice: invoiceId } }, { session });
+        const client = party.design ? null : await Client.findById(party.client._id).select('name phone email address gstNumber').session(session).lean();
+        return createNumberedInvoice(company, {
+          _id: invoiceId,
+          company: company._id,
+          design: party.design?._id ?? null,
+          client: party.client._id,
+          // a client-only invoice prints the client's details from a copy, like a direct invoice does
+          billTo: client ? { name: client.name, company: String(body.billToCompany || '').trim().slice(0, 120), phone: client.phone || '', email: client.email || '', address: client.address || '', gstNumber: client.gstNumber || '' } : null,
+          billToCompany: party.design ? String(body.billToCompany || '').trim().slice(0, 120) : '',
+          title: party.title,
+          total: money(pricing.total),
+          pricing,
+          bills: bills.map((b) => b._id),
+          billRefs: bills.map((b) => ({ bill: b._id, billNo: b.billNo, issuedOn: b.issuedOn, total: b.total, ewayNos: (b.ewayBills || []).map((e) => e.ewayNo) })),
+          details: cleanInvoiceDetails(body.details),
+          termsAndConditions: cleanRichText(body.termsAndConditions || ''),
+          createdByName: user?.name || user?.email || '',
+          idempotencyKey: idempotencyKey || undefined,
+        }, { session });
+      });
+      return { createdInvoice: toApiJSON(created.toObject()) };
+    }, (row) => ({ createdInvoice: toApiJSON(row) }));
+  },
+
+  /**
+   * Void an invoice made from bills. It stays as the record (number never reused, with who voided it and why); its
+   * bills become paid again, so they can be voided or put on a new invoice. Parts invoices from an AMC visit have no bills
+   * and are not voided here.
+   */
+  async voidInvoice(company, user, id, body = {}) {
+    const reason = String(body.reason || '').trim().slice(0, 300);
+    if (!reason) throw badRequest('Give the reason for voiding this invoice');
+    return inTransaction(async (session) => {
+      const invoice = await Invoice.findOne({ _id: objectId(id, 'Invoice'), company: company._id }).session(session);
+      if (!invoice) throw notFound('Invoice');
+      if (invoice.status === 'void') throw badRequest('This invoice is already void');
+      if (!invoice.bills?.length) throw badRequest('Only an invoice made from bills can be voided here');
+      await Bill.updateMany({ _id: { $in: invoice.bills }, company: company._id, invoice: invoice._id, status: 'invoiced' }, { $set: { status: 'paid', invoice: null } }, { session });
+      await SerialUnit.updateMany({ company: company._id, soldInvoice: invoice._id }, { $set: { soldInvoice: null } }, { session });
+      const voided = await Invoice.findOneAndUpdate(
+        { _id: invoice._id, status: { $ne: 'void' } },
+        { $set: { status: 'void', voidedAt: new Date(), voidReason: reason, voidedByName: user?.name || user?.email || '' } },
+        { session, returnDocument: 'after' },
+      ).lean();
+      if (!voided) throw conflict('This invoice was just changed. Refresh and try again');
+      return toApiJSON(voided);
     });
   },
 

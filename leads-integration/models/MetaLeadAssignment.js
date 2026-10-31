@@ -21,6 +21,14 @@ const statusHistorySchema = mongoose.Schema(
       type: String,
       default: '',
     },
+    scheduledAt: {
+      type: Date,
+      default: null,
+    },
+    rescheduled: {
+      type: Boolean,
+      default: false,
+    },
     changedAt: {
       type: Date,
       default: Date.now,

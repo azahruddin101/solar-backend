@@ -1,24 +1,19 @@
 // Installation projects: the company's steps for one accepted design, who does each step, and a log of
 // everything that happened. The company owner manages the whole project; agents work on their own steps.
-import { ROLES, STEP_STATUS } from '../constants/index.js';
+import { ROLES, STEP_PRIORITIES, STEP_STATUS } from '../constants/index.js';
 import { hasPermission } from '../middlewares/auth.middleware.js';
 import { Client, Company, Design, Invoice, Product, Project, User } from '../models/index.js';
 import { resolveAgentRole, stepPriority } from './company.service.js';
 import { notifyAmcCompleted, notifyStepAssigned, notifyStepStatusChange } from './notification.service.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
 import { dateRangeOnField } from '../utils/listFilters.js';
+import { projectShowMatch } from './listPresets.js';
 import { parsePagination, toApiJSON, toApiJSONList } from '../utils/lean.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
-import { deductStock, inTransaction } from './stock.service.js';
+import { inTransaction } from './stock.service.js';
 import { billingService } from './billing.service.js';
-import {
-  ensureProjectAmc,
-  installationCompletionDate,
-  markAmcRequestCompleted,
-  spawnAmcVisitsForProject,
-  syncDesignAmcRequestsToProject,
-} from './amc.service.js';
+import { amcLog, ensureProjectAmc, installationCompletionDate, markAmcRequestCompleted, spawnAmcVisitsForProject, syncDesignAmcRequestsToProject } from './amc.service.js';
 
 const MAX_STEPS = 30;
 const AGENT_FIELDS = 'name email phone jobTitle roles photo active';
@@ -253,16 +248,82 @@ async function getOwn(company, id) {
 }
 
 /** Lists leave out the logs. Paginated: pass `page`/`limit` (defaults to a single bounded page). */
-export async function listProjects(company, { page, limit, from, to } = {}) {
+export async function listProjects(company, { page, limit, from, to, show } = {}) {
   const filter = { company: company._id };
   const dateMatch = dateRangeOnField('updatedAt', from, to);
   if (dateMatch) Object.assign(filter, dateMatch);
+  Object.assign(filter, projectShowMatch(show) || {}); // a dashboard preset (listPresets.js)
   const { page: p, limit: l, skip } = parsePagination({ page, limit });
   const [items, total] = await Promise.all([
     populate(Project.find(filter).select('-logs').sort({ updatedAt: -1 }).skip(skip).limit(l), ROLES.COMPANY).lean(),
     Project.countDocuments(filter),
   ]);
   return { items: toApiJSONList(items), total, page: p, limit: l };
+}
+
+/**
+ * The installation Kanban: a column per step of the company's workflow (plus any step an installation added) and a
+ * final "Completed" column; each installation is a card in the column of the step it is on. An agent sees the
+ * installations they hold a step in; `mine` on each step says whether they may move it.
+ */
+export async function stepBoard(company, { agentId = null } = {}) {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const [co, projects] = await Promise.all([
+    Company.findById(company._id).select('installationSteps').lean(),
+    Project.find({ company: company._id, ...(agentId ? { 'steps.assignee': agentId } : {}) })
+      .select('design client status steps installationCompletedAt updatedAt')
+      .populate('design', 'name summary.address summary.kwp')
+      .populate('client', 'name phone')
+      .populate('steps.assignee', 'name')
+      .sort({ updatedAt: -1 })
+      .lean(),
+  ]);
+  const names = (co?.installationSteps || []).map((t) => t.name).filter(Boolean);
+  for (const p of projects) for (const s of p.steps || []) if (s.name && !names.includes(s.name)) names.push(s.name); // steps an installation added on its own
+  const isMine = (s) => (agentId ? Boolean(s.assignee) && String(s.assignee._id) === String(agentId) : true);
+  const stepRow = (s, i) => ({
+    id: String(s._id),
+    name: s.name,
+    index: i + 1,
+    status: s.status,
+    priority: s.priority || 'medium',
+    role: s.role || '',
+    assignee: s.assignee ? { id: String(s.assignee._id), name: s.assignee.name || '' } : null,
+    startedAt: s.startedAt || null,
+    completedAt: s.completedAt || null,
+    stuck: s.status === 'in_progress' && Boolean(s.startedAt) && now - new Date(s.startedAt).getTime() > 7 * DAY, // as the dashboard counts "stuck"
+    mine: isMine(s),
+  });
+  const cards = projects.map((p) => {
+    const steps = (p.steps || []).map(stepRow);
+    const at = steps.findIndex((s) => s.status !== 'done'); // the step being worked on: the first not done
+    const current = at >= 0 ? steps[at] : null;
+    return {
+      id: String(p._id),
+      project: p.design?.name || 'Installation',
+      client: p.client?.name || '',
+      phone: p.client?.phone || '',
+      address: p.design?.summary?.address || '',
+      kwp: p.design?.summary?.kwp || 0,
+      status: p.status,
+      done: steps.filter((s) => s.status === 'done').length,
+      total: steps.length,
+      current,
+      next: at >= 0 && steps[at + 1] ? { id: steps[at + 1].id, name: steps[at + 1].name } : null,
+      steps,
+      column: current ? current.name : 'completed',
+      installationCompletedAt: p.installationCompletedAt || null,
+      updatedAt: p.updatedAt,
+    };
+  });
+  const rank = Object.fromEntries(STEP_PRIORITIES.map((pr, i) => [pr, -i])); // urgent first
+  const byUrgency = (a, b) => (b.current?.stuck ? 1 : 0) - (a.current?.stuck ? 1 : 0) || (rank[a.current?.priority] ?? 0) - (rank[b.current?.priority] ?? 0) || new Date(b.updatedAt) - new Date(a.updatedAt);
+  const columns = [
+    ...names.map((name) => ({ id: name, name, count: 0, cards: cards.filter((c) => c.column === name).sort(byUrgency) })),
+    { id: 'completed', name: 'Completed', count: 0, cards: cards.filter((c) => c.column === 'completed').sort((a, b) => new Date(b.installationCompletedAt || 0) - new Date(a.installationCompletedAt || 0)) },
+  ].map((c) => ({ ...c, count: c.cards.length }));
+  return { columns, total: cards.length, open: cards.filter((c) => c.column !== 'completed').length };
 }
 
 export async function getProject(company, id) {
@@ -462,6 +523,7 @@ function applyAmcCompletion(visit, body, user) {
   visit.completedBy = user._id;
   visit.completedByName = user.name || user.email;
   visit.completionNote = body?.note ? String(body.note).trim().slice(0, 1000) : '';
+  amcLog(visit, user, 'amc_completed', visit.completionNote);
 }
 
 /** Emails the client, the company and the assigned staff member that a visit was completed. */
@@ -526,13 +588,29 @@ async function amcPartsInvoiceView(project, visit, invoice) {
 async function billAmcParts(company, user, project, visit, body) {
   if (visit.partsInvoice) throw conflict(`The parts for this visit were already invoiced (${visit.partsInvoiceNo})`);
   if (!project.design) throw badRequest('This installation has no proposal to invoice against');
-  const invoice = await billingService.createAmcPartsInvoice(company, user, { project, visit, lines: body.lines, withGst: body.withGst !== false });
-  visit.partsInvoice = invoice._id;
-  visit.partsInvoiceNo = invoice.invoiceNo;
-  visit.parts = (invoice.pricing?.lines || []).map((l) => ({ productName: l.name, qty: l.qty, unit: l.unit || '', rate: l.rate }));
-  const what = visit.parts.map((p) => `${p.qty} ${p.unit} ${p.productName}`.trim()).join(', ');
-  log(project, user, 'amc_parts_invoiced', null, [`${visit.name} — invoice ${invoice.invoiceNo}: ${what}`, body.note].filter(Boolean).join(' — '));
-  await project.save();
+  // the invoice, the stock it takes and the note on the visit are one commit: if recording the invoice on the visit
+  // fails, or the visit was just invoiced by someone else, the invoice and the stock deduction are rolled back with it
+  const projectLogs = project.logs.length;
+  const visitLogs = visit.logs.length;
+  const invoice = await inTransaction(async (session) => {
+    project.logs.splice(projectLogs); // a retried attempt starts from the logs as they were
+    visit.logs.splice(visitLogs);
+    const created = await billingService.createAmcPartsInvoice(company, user, { project, visit, lines: body.lines, withGst: body.withGst !== false, session });
+    const claimed = await Project.updateOne(
+      { _id: project._id, amcVisits: { $elemMatch: { _id: visit._id, partsInvoice: null } } },
+      { $set: { 'amcVisits.$.partsInvoice': created._id, 'amcVisits.$.partsInvoiceNo': created.invoiceNo } },
+      { session },
+    );
+    if (!claimed.modifiedCount) throw conflict('The parts for this visit were just invoiced. Refresh to see the invoice.');
+    visit.partsInvoice = created._id;
+    visit.partsInvoiceNo = created.invoiceNo;
+    visit.parts = (created.pricing?.lines || []).map((l) => ({ productName: l.name, qty: l.qty, unit: l.unit || '', rate: l.rate }));
+    const what = visit.parts.map((p) => `${p.qty} ${p.unit} ${p.productName}`.trim()).join(', ');
+    log(project, user, 'amc_parts_invoiced', null, [`${visit.name} — invoice ${created.invoiceNo}: ${what}`, body.note].filter(Boolean).join(' — '));
+    amcLog(visit, user, 'amc_parts_invoiced', [`Invoice ${created.invoiceNo}: ${what}`, body.note].filter(Boolean).join(' — '));
+    await project.save({ session });
+    return created;
+  });
   return amcPartsInvoiceView(project, visit, invoice);
 }
 

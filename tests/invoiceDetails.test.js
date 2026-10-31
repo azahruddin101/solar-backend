@@ -1,24 +1,27 @@
-// The optional reference & delivery details on an invoice: cleaned, stored, and empty when nothing was entered.
+// The optional reference & delivery details on an invoice (made from bills): cleaned, stored, and empty when nothing was entered.
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import mongoose from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { Client, Company, Design, Invoice } from '../src/models/index.js';
+import { Bill, Client, Company, Design, EwayBill, Invoice, Payment } from '../src/models/index.js';
+import { billService } from '../src/services/bill.service.js';
 import { billingService, cleanInvoiceDetails } from '../src/services/billing.service.js';
 
 let replSet;
 let company;
 const user = { _id: new mongoose.Types.ObjectId(), name: 'Owner', role: 'company' };
-const direct = (extra = {}) => billingService.createDirectInvoice(company, user, {
-  billTo: { name: 'Walk-in customer' },
-  pricing: { lines: [{ name: 'Service', qty: 1, rate: 1000, gstPercent: 18 }], gstIncluded: false, withGst: true, invoiceGstMode: 'with_gst' },
-  ...extra,
-});
+let walkIn;
+// a paid, services-only bill for the party, then the invoice that settles it
+const bill = (party) => billService.create(company, user, { ...party, services: [{ name: 'Service', qty: 1, rate: 1000, gstPercent: 18 }], withGst: true, payment: { mode: 'cash' } });
+const direct = async (extra = {}) => {
+  await bill({ client: walkIn.id });
+  return billingService.createInvoiceFromBills(company, user, { client: walkIn.id, ...extra });
+};
 
 before(async () => {
   replSet = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
   await mongoose.connect(replSet.getUri());
-  await Invoice.init();
+  await Promise.all([Invoice, Bill, EwayBill, Payment].map((M) => M.init()));
 });
 after(async () => {
   await mongoose.disconnect();
@@ -26,8 +29,9 @@ after(async () => {
 });
 beforeEach(async () => {
   await mongoose.connection.db.dropDatabase();
-  await Invoice.syncIndexes();
+  await Promise.all([Invoice, Bill, EwayBill, Payment].map((M) => M.syncIndexes()));
   company = await Company.create({ name: 'Acme Solar' });
+  walkIn = await Client.create({ company: company._id, name: 'Walk-in customer' });
 });
 
 test('details are trimmed, limited to the known fields and dropped when empty', () => {
@@ -49,10 +53,10 @@ test('an invoice keeps the details that were entered, and none when none were', 
   assert.deepEqual((await Invoice.findById(res.id)).toJSON().details, full);
 });
 
-test('a direct invoice keeps the buyer’s company name when given', async () => {
-  const res = (await direct({ billTo: { name: 'Sunil Patil', company: '  Patil Industries Pvt Ltd ' } })).createdInvoice;
+test('a client-only invoice keeps the buyer’s company name when given', async () => {
+  const res = (await direct({ billToCompany: '  Patil Industries Pvt Ltd ' })).createdInvoice;
   assert.equal(res.billTo.company, 'Patil Industries Pvt Ltd');
-  assert.equal(res.billTo.name, 'Sunil Patil');
+  assert.equal(res.billTo.name, 'Walk-in Customer'); // the client model capitalises names
   assert.equal((await direct()).createdInvoice.billTo.company, ''); // optional
 });
 
@@ -60,12 +64,14 @@ test('an invoice on a proposal keeps the company name and details, and the next 
   const client = await Client.create({ company: company._id, name: 'Sunil Patil' });
   const pricing = { lines: [{ name: 'Rooftop system', qty: 1, rate: 100000, gstPercent: 12 }], gstIncluded: false, withGst: true, invoiceGstMode: 'with_gst', total: 112000 };
   const design = await Design.create({ company: company._id, client: client._id, name: 'Patil bungalow', status: 'won', summary: { pricing, cost: 112000 } });
-  const first = await billingService.createInvoice(company, user, design.id, { billToCompany: ' Patil Industries ', details: { buyerOrderNo: 'PO-5' } });
+  await bill({ design: design.id });
+  const first = await billingService.createInvoiceFromBills(company, user, { design: design.id, billToCompany: ' Patil Industries ', details: { buyerOrderNo: 'PO-5' } });
   assert.equal(first.createdInvoice.billToCompany, 'Patil Industries');
   assert.equal(first.createdInvoice.details.buyerOrderNo, 'PO-5');
   assert.equal(first.createdInvoice.billTo ?? null, null); // the buyer is still the client record
   const form = await billingService.get(company, design.id);
   assert.equal(form.previousBillToCompany, 'Patil Industries');
-  const second = await billingService.createInvoice(company, user, design.id, {});
+  await bill({ design: design.id });
+  const second = await billingService.createInvoiceFromBills(company, user, { design: design.id });
   assert.equal(second.createdInvoice.billToCompany ?? '', '');
 });

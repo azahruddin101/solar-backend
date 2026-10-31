@@ -26,6 +26,7 @@ const serialUnitSchema = new mongoose.Schema(
     serialNo: { type: String, required: [true, 'Serial number is required'], trim: true, maxlength: 80 },
     status: { type: String, enum: UNIT_STATUS, default: 'inStock' },
     soldInvoice: { type: ObjectId, ref: 'Invoice', default: null },
+    soldEwayBill: { type: ObjectId, ref: 'EwayBill', default: null }, // the e-way bill it left stock on (the invoice follows later)
     installedProject: { type: ObjectId, ref: 'Project', default: null }, // the installation (site) it went to
     installDate: { type: Date, default: null },
   },

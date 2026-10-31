@@ -47,6 +47,10 @@ const amcVisitSchema = new mongoose.Schema({
   parts: { type: [new mongoose.Schema({ productName: text(160), qty: { type: Number, default: 0 }, unit: text(20), rate: { type: Number, default: 0 } }, { _id: false })], default: () => [] },
   partsInvoice: { type: ObjectId, ref: 'Invoice', default: null },
   partsInvoiceNo: text(40),
+  // who held the visit before it was handed to someone else, oldest first; reassignedCount > 0 marks a reassigned visit
+  previousAssignees: { type: [new mongoose.Schema({ assignee: { type: ObjectId, ref: 'User', default: null }, assigneeName: text(120), assignedAt: { type: Date, default: null }, replacedAt: { type: Date, default: null } }, { _id: false })], default: () => [] },
+  reassignedCount: { type: Number, default: 0 },
+  logs: { type: [activityLogSchema], default: () => [] }, // what happened on this visit: requested, assigned, reassigned, completed, parts invoiced
 }, subSchemaOptions);
 
 /** The installation of an accepted design: the company's steps, who does each one, and what happened. */

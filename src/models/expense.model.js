@@ -9,6 +9,9 @@ const expenseSchema = new mongoose.Schema(
     amount: { type: Number, required: true, min: 0.01 },
     reason: { type: String, required: true, trim: true, maxlength: 300 },
     note: text(500), // optional detail, e.g. the vendor or bill number
+    billUrl: { type: String, default: '' }, // vendor bill (PDF, image or Excel), /uploads/<file>; protected
+    billName: text(200),
+    billSize: { type: Number, default: 0, min: 0 },
     spentOn: { type: Date, default: Date.now },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     createdByName: text(120),

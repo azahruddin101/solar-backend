@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { COMPANY_STATUS, DEFAULT_AGENT_ROLES, DEFAULT_PRODUCT_UNITS, DEFAULT_STEP_PRIORITY, STEP_PRIORITIES } from '../constants/index.js';
+import { COMPANY_STATUS, DEFAULT_AGENT_ROLES, DEFAULT_EXPENSE_REASONS, DEFAULT_PRODUCT_UNITS, DEFAULT_STEP_PRIORITY, DEFAULT_SUBSIDY_STEPS, STEP_PRIORITIES } from '../constants/index.js';
 import { capFirst } from '../utils/text.js';
 import { schemaOptions, subSchemaOptions, text } from './schemaOptions.js';
 
@@ -15,7 +15,7 @@ const installationStepSchema = new mongoose.Schema(
   subSchemaOptions,
 );
 
-/** A step of the company's loan process: copied onto each client's loan when it is opened. */
+/** A step of the company's loan or subsidy process: copied onto each client's loan / subsidy when it is opened. */
 const loanStepSchema = new mongoose.Schema(
   {
     name: { type: String, required: [true, 'Step name is required'], trim: true, maxlength: 80 },
@@ -101,6 +101,10 @@ const companySchema = new mongoose.Schema(
     amcTemplates: { type: [amcTemplateSchema], default: () => [] },
     // loan process template: copied onto a client's loan when the client is marked as buying with a loan
     loanSteps: { type: [loanStepSchema], default: () => [] },
+    // subsidy process template: copied onto a proposal's subsidy file when the proposal is marked as having a subsidy
+    subsidySteps: { type: [loanStepSchema], default: () => DEFAULT_SUBSIDY_STEPS.map((s) => ({ ...s })) },
+    // reasons offered when recording a project expense (Company.expenseReasons)
+    expenseReasons: { type: [{ type: String, trim: true, maxlength: 300 }], default: () => [...DEFAULT_EXPENSE_REASONS] },
 
     // pricing used by the designer
     currency: text(8, { default: 'INR' }),

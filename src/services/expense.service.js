@@ -1,13 +1,49 @@
 // Expenses: the amount spent on each proposal's project and why, measured against the budget set for it.
 // Profit / loss is simply budget − expenses: what's left of the budget is profit, going over it is a loss.
+import { DEFAULT_EXPENSE_REASONS, MAX_EXPENSE_REASONS } from '../constants/index.js';
 import { Design, Expense, ProjectBudget } from '../models/index.js';
 import { badRequest, notFound } from '../utils/HttpError.js';
 import { objectId } from '../utils/validators.js';
+import { deleteFile } from './storage.service.js';
 
 const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
+const billFile = (url) => (url ? String(url).replace(/^\/uploads\//, '') : '');
+const dropBillFile = (url) => { const n = billFile(url); return n ? deleteFile(n).catch(() => {}) : undefined; };
+
+/** Reasons shown in the expense form; falls back to the platform defaults when the company list is empty. */
+export function expenseReasonsList(company) {
+  const raw = company?.expenseReasons;
+  if (Array.isArray(raw) && raw.length) return raw.map((r) => String(r).trim()).filter(Boolean);
+  return [...DEFAULT_EXPENSE_REASONS];
+}
+
+function cleanReasons(list) {
+  const seen = new Set();
+  const out = [];
+  for (const item of list || []) {
+    const r = String(item).trim();
+    if (!r || seen.has(r.toLowerCase())) continue;
+    seen.add(r.toLowerCase());
+    out.push(r);
+    if (out.length >= MAX_EXPENSE_REASONS) break;
+  }
+  if (!out.length) throw badRequest('Add at least one expense reason');
+  return out;
+}
+
+export function listReasons(company) {
+  return expenseReasonsList(company);
+}
+
+export async function updateReasons(company, body) {
+  company.expenseReasons = cleanReasons(body.reasons);
+  await company.save();
+  return company.expenseReasons;
+}
+
 async function ownDesign(company, id) {
-  const design = await Design.findOne({ _id: objectId(id, 'Proposal'), company: company._id }).select('name status client').populate('client', 'name');
+  const design = await Design.findOne({ _id: objectId(id, 'Proposal'), company: company._id }).select('name status client summary.cost summary.pricing.total').populate('client', 'name');
   if (!design) throw notFound('Proposal');
   return design;
 }
@@ -25,7 +61,11 @@ const usedOf = (spent, budget) => (budget > 0 ? Math.round((spent / budget) * 10
 /** Budget − expenses (null without a budget): positive is profit, negative is loss. */
 const profitOf = (spent, budget) => (budget !== null && budget !== undefined ? money(budget - spent) : null);
 
-const budgetJSON = (b) => (b ? { amount: money(b.amount), note: b.note || '', updatedByName: b.updatedByName || '', updatedAt: b.updatedAt } : null);
+const budgetJSON = (b) => (b ? { amount: money(b.amount), note: b.note || '', updatedByName: b.updatedByName || '', updatedAt: b.updatedAt, source: 'set' } : null);
+
+/** The proposal's price: what a booked project is budgeted at until someone sets a budget of their own. */
+const proposalPrice = (design) => money(design.summary?.pricing?.total ?? design.summary?.cost);
+const proposalBudget = (design) => (design.status === 'won' && proposalPrice(design) > 0 ? { amount: proposalPrice(design), note: '', updatedByName: '', updatedAt: null, source: 'proposal' } : null);
 
 /** Per project: what was spent, how many entries, the latest one and the budget. Booked proposals and any with expenses or a budget. */
 async function projectRows(company) {
@@ -40,14 +80,15 @@ async function projectRows(company) {
   const budgetOf = new Map(budgets.map((b) => [String(b.design), b.amount]));
   const ids = [...sums.map((s) => s._id), ...budgets.map((b) => b.design)];
   const designs = await Design.find({ company: company._id, $or: [{ status: 'won' }, { _id: { $in: ids } }] })
-    .select('name status client summary.address')
+    .select('name status client summary.address summary.cost summary.pricing.total')
     .populate('client', 'name')
     .sort({ updatedAt: -1 })
     .limit(1000);
   return designs.map((d) => {
     const s = byDesign.get(d.id);
     const spent = money(s?.spent);
-    const budget = budgetOf.has(d.id) ? money(budgetOf.get(d.id)) : null;
+    const own = budgetOf.has(d.id) ? money(budgetOf.get(d.id)) : null; // a budget someone set; otherwise a booked proposal's price
+    const budget = own ?? proposalBudget(d)?.amount ?? null;
     return {
       id: d.id,
       name: d.name,
@@ -58,6 +99,7 @@ async function projectRows(company) {
       count: s?.count || 0,
       lastExpenseOn: s?.last || null,
       budget,
+      budgetSource: own !== null ? 'set' : budget !== null ? 'proposal' : null,
       budgetUsed: usedOf(spent, budget),
       profit: profitOf(spent, budget),
     };
@@ -88,13 +130,20 @@ export async function listForDesign(company, designId) {
     ProjectBudget.findOne({ company: company._id, design: design._id }).lean(),
   ]);
   const total = money(rows.reduce((a, e) => a + e.amount, 0));
+  const effective = budgetJSON(budget) || proposalBudget(design); // the budget in force: set by someone, or the proposal's price
   return {
-    design: { id: design.id, name: design.name, status: design.status, client: design.client ? { id: design.client.id, name: design.client.name } : null },
+    design: {
+      id: design.id,
+      name: design.name,
+      status: design.status,
+      client: design.client ? { id: design.client.id, name: design.client.name } : null,
+      amount: money(design.summary?.pricing?.total ?? design.summary?.cost), // the quoted price: the budget starts from it
+    },
     items: rows.map((e) => e.toJSON()),
     total,
-    budget: budgetJSON(budget),
-    budgetUsed: usedOf(total, budget?.amount),
-    profit: profitOf(total, budget ? budget.amount : null),
+    budget: effective,
+    budgetUsed: usedOf(total, effective?.amount),
+    profit: profitOf(total, effective ? effective.amount : null),
   };
 }
 
@@ -191,12 +240,45 @@ export async function update(company, id, body) {
   return expense.toJSON();
 }
 
+/** Keeps the vendor bill (already stored by uploadExpenseBill) with an expense; a bill uploaded before is replaced. */
+export async function attachBill(company, expenseId, file) {
+  if (!file?.filename) throw badRequest('Choose the bill to upload (PDF, image or Excel)');
+  let expense;
+  try {
+    expense = await ownExpense(company, expenseId);
+  } catch (e) {
+    await deleteFile(file.filename).catch(() => {});
+    throw e;
+  }
+  const old = expense.billUrl;
+  expense.billUrl = `/uploads/${file.filename}`;
+  expense.billName = String(file.originalname || 'Bill').slice(0, 200);
+  expense.billSize = Number(file.size) || 0;
+  await expense.save();
+  if (old) await dropBillFile(old);
+  return expense.toJSON();
+}
+
+export async function removeBill(company, expenseId) {
+  const expense = await ownExpense(company, expenseId);
+  if (!expense.billUrl) return expense.toJSON();
+  await dropBillFile(expense.billUrl);
+  expense.billUrl = '';
+  expense.billName = '';
+  expense.billSize = 0;
+  await expense.save();
+  return expense.toJSON();
+}
+
 export async function remove(company, id) {
   const expense = await ownExpense(company, id);
+  await dropBillFile(expense.billUrl);
   await expense.deleteOne();
 }
 
 export async function deleteForDesign(designId) {
+  const rows = await Expense.find({ design: designId }).select('billUrl').lean();
+  await Promise.all(rows.map((e) => dropBillFile(e.billUrl)));
   await Promise.all([Expense.deleteMany({ design: designId }), ProjectBudget.deleteMany({ design: designId })]);
 }
 

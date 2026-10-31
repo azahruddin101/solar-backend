@@ -25,6 +25,7 @@ projectRoutes.get('/amc-templates', view, projects.getAmcTemplates);
 projectRoutes.put('/amc-templates', requireRole(ROLES.COMPANY), validate(S.amcTemplatesSchema), projects.updateAmcTemplates);
 projectRoutes.get('/amc-overview', view, projects.amcOverview);
 projectRoutes.get('/amc-visits', view, projects.amcVisits);
+projectRoutes.get('/board', view, projects.stepBoard); // the Kanban: every open installation's steps by status
 projectRoutes.get('/amc-requests', view, projects.amcRequests);
 projectRoutes.put('/amc-requests/:designId/:requestId/assign', permissionOnly('tasks', 'assign'), validate(S.amcRequestAssignSchema), projects.assignAmcRequest);
 // who installation steps can be assigned to (the owner's staff list is owner-only; this is just names and job roles)
@@ -51,6 +52,7 @@ export const myProjectRoutes = Router();
 myProjectRoutes.get('/', projects.listMine);
 myProjectRoutes.get('/amc-overview', projects.amcOverviewMine);
 myProjectRoutes.get('/amc-visits', projects.amcVisitsMine);
+myProjectRoutes.get('/board', projects.stepBoardMine);
 myProjectRoutes.get('/:id/lifecycle', projects.lifecycleMine);
 myProjectRoutes.get('/:id', projects.getMine);
 myProjectRoutes.post('/:id/notes', validate(S.noteSchema), projects.addMyNote);

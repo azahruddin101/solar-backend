@@ -1,4 +1,5 @@
 import * as agentService from '../services/agent.service.js';
+import { staffOverview } from '../services/staffOverview.service.js';
 
 export async function list(req, res) {
   res.json(await agentService.listAgents(req.company));
@@ -6,6 +7,10 @@ export async function list(req, res) {
 
 export async function analytics(req, res) {
   res.json(await agentService.teamAnalytics(req.company));
+}
+
+export async function overview(req, res) {
+  res.json(await staffOverview(req.company, req.params.id));
 }
 
 export async function create(req, res) {

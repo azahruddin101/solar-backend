@@ -28,12 +28,21 @@ function stockFields(l) {
   };
 }
 
+/** Where a line of the sale chain came from: the e-way bill and bill it was on (strings, kept for the PDFs). */
+function chainFields(l) {
+  const out = {};
+  if (l.kind === 'service' || l.kind === 'goods') out.kind = l.kind;
+  for (const k of ['ewayBillId', 'ewayNo', 'billId', 'billNo']) if (l[k]) out[k] = String(l[k]).slice(0, 40);
+  return out;
+}
+
 function normalizeLine(l) {
   const qty = Math.max(0, n(l.qty) || 1);
   const rate = round2(l.rate);
   const amount = round2(qty * rate);
   return {
     ...stockFields(l),
+    ...chainFields(l),
     name: String(l.name || '').trim().slice(0, 160),
     detail: String(l.detail || '').slice(0, 300),
     hsn: String(l.hsn || l.hsnCode || '').slice(0, 20),
@@ -57,6 +66,7 @@ export function summarizeLinePricing({ lines = [], gstIncluded = true, discount 
   discountAmount = round2(Math.min(gross, Math.max(0, discountAmount)));
   const ratio = gross > 0 ? (gross - discountAmount) / gross : 1;
 
+  // each line keeps `gross` (qty × rate as entered); `amount` is its share after the discount, which GST is worked out on
   const processed = raw.map((l) => {
     const lineGross = round2(l.amount * ratio);
     const catalogPct = l.gstPercent ?? 18;
@@ -64,14 +74,14 @@ export function summarizeLinePricing({ lines = [], gstIncluded = true, discount 
     if (gstIncluded && pct > 0) {
       const taxable = round2(lineGross / (1 + pct / 100));
       const gst = round2(lineGross - taxable);
-      return { ...l, gstPercent: catalogPct, amount: lineGross, taxable, gstAmount: gst, lineTotal: lineGross };
+      return { ...l, gross: l.amount, gstPercent: catalogPct, amount: lineGross, taxable, gstAmount: gst, lineTotal: lineGross };
     }
     if (!gstIncluded && pct > 0) {
       const taxable = lineGross;
       const gst = round2(taxable * (pct / 100));
-      return { ...l, gstPercent: catalogPct, amount: lineGross, taxable, gstAmount: gst, lineTotal: round2(taxable + gst) };
+      return { ...l, gross: l.amount, gstPercent: catalogPct, amount: lineGross, taxable, gstAmount: gst, lineTotal: round2(taxable + gst) };
     }
-    return { ...l, gstPercent: catalogPct, amount: lineGross, taxable: lineGross, gstAmount: 0, lineTotal: lineGross };
+    return { ...l, gross: l.amount, gstPercent: catalogPct, amount: lineGross, taxable: lineGross, gstAmount: 0, lineTotal: lineGross };
   });
 
   const subtotal = round2(processed.reduce((a, l) => a + l.amount, 0));
@@ -126,11 +136,13 @@ export function authorityInvoicePricing(input) {
 
   const applyGst = input.withGst !== false && input.invoiceGstMode !== 'without_gst';
   const gstIncluded = input.gstIncluded !== false;
+  // two discounts: the proposal's (carried over as is) and an extra one on the invoice, taken after it
+  const parts = splitDiscounts(lines, gstIncluded, applyGst, input);
   const summary = summarizeLinePricing({
     lines,
     gstIncluded,
-    discount: input.discount,
-    discountIsPercent: input.discountIsPercent,
+    discount: parts.total,
+    discountIsPercent: false,
     withGst: applyGst,
   });
 
@@ -140,9 +152,14 @@ export function authorityInvoicePricing(input) {
     lines: summary.lines,
     subtotal: summary.subtotal,
     discountAmount: summary.discountAmount,
-    discount: summary.discount,
-    discountIsPercent: summary.discountIsPercent,
+    discount: n(input.discount),
+    discountIsPercent: Boolean(input.discountIsPercent),
     discountRemark: String(input.discountRemark || '').slice(0, 200),
+    proposalDiscountAmount: parts.first,
+    extraDiscount: n(input.extraDiscount),
+    extraDiscountIsPercent: Boolean(input.extraDiscountIsPercent),
+    extraDiscountRemark: String(input.extraDiscountRemark || '').slice(0, 200),
+    extraDiscountAmount: parts.extra,
     taxableTotal: summary.taxableTotal,
     gstTotal: summary.gstTotal,
     taxByHsn: summary.taxByHsn,
@@ -155,12 +172,59 @@ export function authorityInvoicePricing(input) {
   };
 }
 
-/** Use custom invoice lines when provided; otherwise recompute from the proposal's saved pricing if it has lines. */
-export function resolveInvoicePricing(bodyPricing, designPricing) {
-  if (bodyPricing && typeof bodyPricing === 'object') return authorityInvoicePricing(bodyPricing);
-  if (designPricing?.lines?.length) return authorityInvoicePricing(designPricing);
-  if (designPricing && round2(designPricing.total) > 0) {
-    return { ...designPricing, total: round2(designPricing.total) };
+/**
+ * The proposal's discount on the line subtotal, then the invoice's extra discount on what is left; each flat or %.
+ * Returns the two amounts and their sum (never more than the subtotal).
+ */
+export function splitDiscounts(lines, gstIncluded, withGst, input = {}) {
+  const gross = summarizeLinePricing({ lines, gstIncluded, discount: 0, withGst }).subtotal;
+  const amountOf = (base, value, pct) => round2(Math.min(base, Math.max(0, pct ? base * (n(value) / 100) : n(value))));
+  const first = amountOf(gross, input.discount, input.discountIsPercent);
+  const extra = amountOf(gross - first, input.extraDiscount, input.extraDiscountIsPercent);
+  return { gross, first, extra, total: round2(first + extra) };
+}
+
+/**
+ * One pricing for an invoice that settles several bills: their frozen lines one after another (each tagged with its
+ * bill number) and their totals added up — nothing is recomputed, so the invoice total is exactly what was paid on the
+ * bills, whatever their GST rates and discounts. A bill made without GST keeps its lines at 0 % GST; the invoice is a
+ * tax invoice as soon as any bill carried GST.
+ */
+export function consolidatePricing(bills) {
+  if (!bills?.length) throw badRequest('There is no paid bill to invoice yet');
+  const withGst = bills.some((b) => !(b.pricing?.withGst === false || b.pricing?.invoiceGstMode === 'without_gst'));
+  const sum = (key) => round2(bills.reduce((a, b) => a + n(b.pricing?.[key]), 0));
+  const lines = bills.flatMap((b) => (b.pricing?.lines || []).map((l) => ({ ...l, billId: String(b._id || b.id), billNo: b.billNo })));
+  const byHsn = new Map();
+  for (const b of bills) {
+    for (const r of b.pricing?.taxByHsn || []) {
+      const row = byHsn.get(r.hsn) || { hsn: r.hsn, taxable: 0, gst: 0, rates: new Set() };
+      row.taxable = round2(row.taxable + n(r.taxable));
+      row.gst = round2(row.gst + n(r.gst));
+      if (r.rate != null) row.rates.add(r.rate);
+      byHsn.set(r.hsn, row);
+    }
   }
-  return null;
+  const gstTotal = sum('gstTotal');
+  const remarks = bills.map((b) => String(b.pricing?.discountRemark || '').trim()).filter(Boolean);
+  return {
+    lines,
+    subtotal: sum('subtotal'),
+    discount: sum('discountAmount'),
+    discountIsPercent: false,
+    discountAmount: sum('discountAmount'),
+    discountRemark: [...new Set(remarks)].join('; ').slice(0, 200),
+    taxableTotal: sum('taxableTotal'),
+    gstTotal,
+    taxByHsn: [...byHsn.values()].map((r) => ({ hsn: r.hsn, taxable: r.taxable, gst: r.gst, rate: r.rates.size === 1 ? [...r.rates][0] : null })),
+    gstIncluded: false,
+    gstRate: bills.reduce((m, b) => Math.max(m, n(b.pricing?.gstRate)), 0),
+    total: sum('total'),
+    sgst: round2(gstTotal / 2),
+    cgst: round2(gstTotal / 2),
+    igst: gstTotal,
+    invoiceGstMode: withGst ? 'with_gst' : 'without_gst',
+    withGst,
+    fromBills: true,
+  };
 }

@@ -1,6 +1,6 @@
 // Request schemas, one per form/endpoint. Objects are "loose": fields not listed here pass through untouched
 // (the services still pick what they accept), while every listed field is checked and normalised.
-import { ATTRIBUTE_TYPES, PRICE_TYPES, UNIT_STATUS, CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, PAYMENT_MODES, PILLAR_SHAPES, PRODUCT_TYPES, STAFF_PERMISSIONS, LOAN_STATUS, STEP_PRIORITIES, STEP_STATUS, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS, CLIENT_TICKET_CATEGORIES } from '../constants/index.js';
+import { ATTRIBUTE_TYPES, CLIENT_PROJECT_TYPES, CLIENT_PROPOSAL_DECISION, CLIENT_ROOF_TYPES, CLIENT_TICKET_CATEGORIES, LOAN_STATUS, SUBSIDY_STATUS, PAYMENT_MODES, PILLAR_SHAPES, PRICE_TYPES, PRODUCT_TYPES, STAFF_PERMISSIONS, STEP_PRIORITIES, STEP_STATUS, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUS, TRANSPORT_MODES, TRANSPORT_REASONS, UNIT_STATUS } from '../constants/index.js';
 import * as f from './common.js';
 
 const { z } = f;
@@ -44,6 +44,9 @@ export const projectBudgetSchema = obj({
   amount: f.num({ min: 0.01, max: 1e10, label: 'Budget' }),
   note: f.textOptional(300, 'Note'),
 });
+export const expenseReasonsSchema = obj({
+  reasons: z.array(z.string().trim().max(300, 'Each reason can be at most 300 characters')).min(1, 'Add at least one expense reason').max(50, 'Up to 50 reasons'),
+});
 
 /* ───────────── loans ───────────── */
 
@@ -53,7 +56,17 @@ export const loanStepsSchema = obj({
 export const loanUpdateSchema = obj({
   status: z.enum(LOAN_STATUS, 'Invalid loan status').optional(),
   lender: f.textOptional(120, 'Bank / lender'),
+  branch: f.textOptional(120, 'Branch'),
+  ifsc: f.textOptional(20, 'IFSC'),
+  accountRef: f.textOptional(60, 'Application / account reference'),
   amount: f.numOptional({ min: 0, max: 1e10, label: 'Loan amount' }),
+  interestRate: f.numOptional({ min: 0, max: 100, label: 'Interest rate' }),
+  tenureMonths: f.numOptional({ min: 0, max: 600, label: 'Period' }),
+  emi: f.numOptional({ min: 0, max: 1e10, label: 'EMI' }),
+  downPayment: f.numOptional({ min: 0, max: 1e10, label: 'Down payment' }),
+  processingFee: f.numOptional({ min: 0, max: 1e10, label: 'Processing fee' }),
+  sanctionedOn: z.union([z.string().max(30), z.null()]).optional(), // a date string; the service parses it
+  disbursedOn: z.union([z.string().max(30), z.null()]).optional(),
   notes: f.textOptional(1000, 'Notes'),
 });
 export const loanStepUpdateSchema = obj({
@@ -61,6 +74,30 @@ export const loanStepUpdateSchema = obj({
   remark: f.textOptional(500, 'Remark'),
 });
 export const loanDocumentRenameSchema = obj({ name: f.textRequired(200, 'Document name') });
+
+/* ───────────── subsidies ───────────── */
+
+export const subsidyStepsSchema = obj({
+  steps: z.array(obj({ name: f.textRequired(80, 'Step name'), description: f.textOptional(400, 'Description') })).max(30, 'You can have up to 30 steps'),
+});
+export const subsidyUpdateSchema = obj({
+  status: z.enum(SUBSIDY_STATUS, 'Invalid subsidy status').optional(),
+  scheme: f.textOptional(120, 'Scheme'),
+  applicationNo: f.textOptional(60, 'Application number'),
+  consumerNo: f.textOptional(60, 'Consumer number'),
+  discom: f.textOptional(120, 'Electricity company'),
+  centralAmount: f.numOptional({ min: 0, max: 1e10, label: 'Central subsidy' }),
+  stateAmount: f.numOptional({ min: 0, max: 1e10, label: 'State subsidy' }),
+  receivedAmount: f.numOptional({ min: 0, max: 1e10, label: 'Subsidy received' }),
+  approvedOn: z.union([z.string().max(30), z.null()]).optional(), // a date string; the service parses it
+  creditedOn: z.union([z.string().max(30), z.null()]).optional(),
+  notes: f.textOptional(1000, 'Notes'),
+});
+export const subsidyStepUpdateSchema = obj({
+  status: z.enum(STEP_STATUS, 'Invalid step status').optional(),
+  remark: f.textOptional(500, 'Remark'),
+});
+export const subsidyDocumentRenameSchema = obj({ name: f.textRequired(200, 'Document name') });
 
 /* ───────────── company / admin ───────────── */
 
@@ -384,44 +421,10 @@ export const installationChargeSchema = obj({
   description: f.textOptional(300, 'Description'),
   defaultPrice: f.numOptional({ min: 0, max: 1e9, label: 'Default price' }),
   gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
+  sac: f.textOptional(8, 'SAC code'),
 });
 
 /* ───────────── billing ───────────── */
-
-export const paymentSchema = obj({
-  amount: f.num({ min: 0.01, max: 1e10, label: 'Amount' }),
-  mode: z.enum(PAYMENT_MODES, 'Choose how the payment was made'),
-  reference: f.textOptional(80, 'Reference'),
-  note: f.textOptional(300, 'Note'),
-  receivedOn: z.string().optional(),
-});
-
-const invoiceLineSchema = obj({
-  name: f.textRequired(160, 'Line item name'),
-  detail: f.textOptional(600, 'Detail'),
-  hsn: f.hsnOptional,
-  qty: f.numOptional({ min: 0, max: 1e6, label: 'Quantity' }),
-  unit: f.textOptional(20, 'Unit'),
-  rate: f.num({ min: 0, max: 1e10, label: 'Rate' }), // a product line is priced from its batch instead
-  gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
-  // a line sold from stock (see stock.service.js allocateInvoiceLines)
-  productId: f.objectIdString.optional(),
-  priceType: z.enum(PRICE_TYPES, 'Choose base, wholesale or retail price').optional(),
-  batch: f.objectIdOrBlank,
-  serials: strArray(2000, 80).optional(),
-});
-
-/** Line items and discount flags; totals are recomputed on the server (BIZ-001). */
-export const invoicePricingInputSchema = obj({
-  lines: z.array(invoiceLineSchema).min(1, 'Add at least one line item').max(100),
-  discount: f.numOptional({ min: 0, max: 1e10, label: 'Discount' }),
-  discountIsPercent: z.boolean().optional(),
-  discountRemark: f.textOptional(200, 'Discount remark'),
-  gstIncluded: z.boolean().optional(),
-  withGst: z.boolean().optional(),
-  invoiceGstMode: z.enum(['with_gst', 'without_gst']).optional(),
-  paymentTerms: f.textOptional(120, 'Payment terms'),
-});
 
 /** Optional reference and delivery details printed on an invoice. */
 export const invoiceDetailsSchema = obj({
@@ -436,43 +439,97 @@ export const invoiceDetailsSchema = obj({
   termsOfDelivery: f.textOptional(300, 'Terms of delivery'),
 });
 
-export const invoiceCreateSchema = obj({
+/* ───────────── sale chain: e-way bill → bill → invoice ───────────── */
+
+/** Who a chain document is for: a booked proposal, or a client with no proposal. */
+const chainParty = { design: f.objectIdOrBlank, client: f.objectIdOrBlank, idempotencyKey: f.textOptional(64, 'Request key') }; // the key makes a repeated create return the first result
+
+const ewayLineSchema = obj({
+  ...stockLine,
+  priceType: z.enum(PRICE_TYPES, 'Choose base, wholesale or retail price'),
+  detail: f.textOptional(600, 'Detail'),
+});
+
+export const ewayBillCreateSchema = obj({
+  ...chainParty,
+  lines: z.array(ewayLineSchema).min(1, 'Add at least one product from stock').max(100, 'Up to 100 lines'),
+  withGst: z.boolean().optional(),
+  govtEwayNo: f.textOptional(20, 'E-way bill number'),
+  issuedOn: z.string().optional(),
+  note: f.textOptional(300, 'Note'),
+  transport: obj({
+    mode: z.enum(TRANSPORT_MODES, 'Choose how the goods travel').optional(),
+    reason: z.enum(TRANSPORT_REASONS, 'Choose the reason for transport').optional(),
+    vehicleNo: f.textOptional(20, 'Vehicle number'),
+    transporter: f.textOptional(120, 'Transporter'),
+    transporterId: f.textOptional(15, 'Transporter id'),
+    docNo: f.textOptional(80, 'Transport document no.'),
+    docDate: f.textOptional(20, 'Transport document date'),
+    fromPlace: f.textOptional(200, 'Dispatch from'),
+    toPlace: f.textOptional(200, 'Deliver to'),
+    distanceKm: f.numOptional({ min: 0, max: 100000, label: 'Distance' }),
+  }).optional(),
+});
+
+export const ewayBillCancelSchema = obj({ reason: f.textOptional(300, 'Reason') });
+
+const billServiceSchema = obj({
+  chargeId: f.objectIdOrBlank,
+  name: f.textOptional(160, 'Service name'),
+  description: f.textOptional(300, 'Description'),
+  hsn: f.textOptional(8, 'SAC code'),
+  qty: f.numOptional({ min: 0, max: 1e6, label: 'Quantity' }),
+  unit: f.textOptional(20, 'Unit'),
+  rate: f.num({ min: 0, max: 1e10, label: 'Price' }),
+  gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
+});
+
+export const billCreateSchema = obj({
+  ...chainParty,
+  ewayBills: z.array(f.objectIdString).max(50, 'Up to 50 e-way bills on a bill').optional(),
+  services: z.array(billServiceSchema).max(50, 'Up to 50 services on a bill').optional(),
+  withGst: z.boolean().optional(),
+  discount: f.numOptional({ min: 0, max: 1e10, label: 'Discount' }),
+  discountIsPercent: z.boolean().optional(),
+  discountRemark: f.textOptional(200, 'Discount remark'),
+  issuedOn: z.string().optional(),
+  payment: obj({
+    mode: z.enum(PAYMENT_MODES, 'Choose how the bill was paid'),
+    reference: f.textOptional(80, 'Reference'),
+    receivedOn: z.string().optional(),
+    note: f.textOptional(300, 'Note'),
+  }),
+});
+
+/** Goods back on a paid bill: which lines (by their place on the bill), how many or which serials, and the refund paid. */
+export const creditNoteCreateSchema = obj({
+  lines: z.array(obj({
+    line: z.number().int().min(0).max(1000),
+    qty: f.numOptional({ min: 0, max: 1e6, label: 'Quantity' }),
+    serials: strArray(2000, 80).optional(),
+  })).min(1, 'Choose at least one product to return').max(100, 'Up to 100 lines'),
+  reason: f.textRequired(300, 'Reason'),
+  issuedOn: z.string().optional(),
+  idempotencyKey: f.textOptional(64, 'Request key'),
+  refund: obj({
+    mode: z.enum(PAYMENT_MODES, 'Choose how the money was paid back'),
+    reference: f.textOptional(80, 'Reference'),
+    refundedOn: z.string().optional(),
+    note: f.textOptional(300, 'Note'),
+  }),
+});
+
+/** Voiding a bill or an invoice: the reason is required and kept on the document; `returnStock` is for bills. */
+export const voidSchema = obj({
+  reason: f.textRequired(300, 'Reason'),
+  returnStock: z.boolean().optional(),
+});
+
+export const invoiceFromBillsSchema = obj({
+  ...chainParty,
+  bills: z.array(f.objectIdString).max(100, 'Up to 100 bills on an invoice').optional(), // omitted: every paid bill of the party
   billToCompany: f.textOptional(120, 'Company name'),
   details: invoiceDetailsSchema.optional(),
-  pricing: invoicePricingInputSchema.optional(),
   termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
 });
 
-/** An invoice with no proposal: who it is for, a title, and the priced lines. `client` optionally links an existing client. */
-export const directInvoiceSchema = obj({
-  client: z.string().optional().nullable(),
-  billTo: obj({
-    name: f.orgNameRequired,
-    company: f.textOptional(120, 'Company name'),
-    phone: f.phoneOptional,
-    email: f.emailOptional,
-    address: f.textOptional(400, 'Address'),
-    gstNumber: f.gstinOptional,
-  }),
-  title: f.textOptional(160, 'Title'),
-  details: invoiceDetailsSchema.optional(),
-  pricing: invoicePricingInputSchema,
-  termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
-});
-
-/** A receipt with no proposal: who paid, optional title, and the payment details. */
-export const directReceiptSchema = obj({
-  client: z.string().optional().nullable(),
-  billTo: obj({
-    name: f.orgNameRequired,
-    phone: f.phoneOptional,
-    email: f.emailOptional,
-    address: f.textOptional(400, 'Address'),
-  }),
-  title: f.textOptional(160, 'Title'),
-  amount: f.num({ min: 0.01, max: 1e10, label: 'Amount' }),
-  mode: z.enum(PAYMENT_MODES, 'Choose how the payment was made'),
-  reference: f.textOptional(80, 'Reference'),
-  note: f.textOptional(300, 'Note'),
-  receivedOn: z.string().optional(),
-});

@@ -1,12 +1,13 @@
-// Stock, batches, serial units and invoices against a real (in-memory) MongoDB replica set: the transactions and
+// Stock, batches, serial units and e-way bills (the document that takes stock out) against a real (in-memory) MongoDB replica set: the transactions and
 // atomic updates only mean something there. Downloads a mongod binary on the first run.
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import mongoose from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { Batch, Category, Client, Company, Design, Invoice, Product, Project, SerialUnit, Supplier } from '../src/models/index.js';
+import { Batch, Category, Client, Company, Design, EwayBill, Product, Project, SerialUnit, Supplier } from '../src/models/index.js';
 import { warrantyEndDate } from '../src/models/serialUnit.model.js';
-import { billingService } from '../src/services/billing.service.js';
+import { billService } from '../src/services/bill.service.js';
+import { ewayBillService } from '../src/services/ewayBill.service.js';
 import { categoryService } from '../src/services/catalog.service.js';
 import { supplierService } from '../src/services/supplier.service.js';
 import { assertTransition, attachBatchBill, deductStock, inTransaction, listUnits, receiveStock, setUnitStatus, updateBatch } from '../src/services/stock.service.js';
@@ -15,6 +16,7 @@ let replSet;
 let company;
 let supplier;
 let category;
+let buyer;
 const user = { _id: new mongoose.Types.ObjectId(), name: 'Owner', role: 'company' };
 const prices = (retail) => ({ basePrice: retail - 20, wholesalePrice: retail - 10, retailPrice: retail, purchasePrice: retail - 40 });
 const day = (n) => new Date(Date.UTC(2026, 0, n));
@@ -22,7 +24,7 @@ const day = (n) => new Date(Date.UTC(2026, 0, n));
 before(async () => {
   replSet = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
   await mongoose.connect(replSet.getUri());
-  await Promise.all([Batch, Invoice, SerialUnit, Company].map((M) => M.init())); // unique indexes exist before the tests
+  await Promise.all([Batch, EwayBill, SerialUnit, Company].map((M) => M.init())); // unique indexes exist before the tests
 });
 
 after(async () => {
@@ -32,18 +34,28 @@ after(async () => {
 
 beforeEach(async () => {
   await mongoose.connection.db.dropDatabase();
-  await Promise.all([Batch, Invoice, SerialUnit].map((M) => M.syncIndexes()));
+  await Promise.all([Batch, EwayBill, SerialUnit].map((M) => M.syncIndexes()));
   company = await Company.create({ name: 'Acme Solar' });
   supplier = await Supplier.create({ company: company._id, name: 'Sunrise' });
   category = await Category.create({ company: company._id, name: 'Cables' });
+  buyer = await Client.create({ company: company._id, name: 'Walk-in customer' });
 });
 
 const product = (fields = {}) => Product.create({ company: company._id, category: category._id, name: 'DC cable 4 sq.mm', unit: 'Metre', ...fields });
 const receive = (p, fields) => receiveStock(company, p._id, { supplier: supplier.id, ...fields });
-const invoice = (lines) => billingService.createDirectInvoice(company, user, {
-  billTo: { name: 'Walk-in customer' },
-  pricing: { lines, gstIncluded: false, withGst: true, invoiceGstMode: 'with_gst' },
+// a sale: goods leave stock on an e-way bill (priced from their batches; any rate or name typed is ignored)
+const invoice = (lines) => ewayBillService.create(company, user, {
+  client: buyer.id,
+  lines: lines.map(({ name, rate, ...line }) => line),
+  withGst: true,
 });
+
+// a sale that has been billed: its units may then be installed, returned and so on
+const billedSale = async (lines) => {
+  const e = await invoice(lines);
+  await billService.create(company, user, { client: buyer.id, ewayBills: [e.id], payment: { mode: 'cash' } });
+  return e;
+};
 
 describe('batch creation', () => {
   test('needs base, wholesale and retail prices', async () => {
@@ -108,10 +120,10 @@ describe('serial units', () => {
   test('sold → installed → returned → in stock, and back into the batch', async () => {
     const p = await product({ name: 'Inverter 5 kW', isSerialized: true, unit: 'Piece', warrantyMonths: 60 });
     const batch = await receive(p, { serials: ['INV-1', 'INV-2'], ...prices(48000) });
-    await invoice([{ name: 'Inverter', productId: p.id, serials: ['INV-1'], priceType: 'retail', rate: 0 }]);
+    await billedSale([{ name: 'Inverter', productId: p.id, serials: ['INV-1'], priceType: 'retail', rate: 0 }]);
     let unit = await SerialUnit.findOne({ serialNo: 'INV-1' });
     assert.equal(unit.status, 'sold');
-    assert.ok(unit.soldInvoice);
+    assert.ok(unit.soldEwayBill);
     assert.equal((await Batch.findById(batch._id)).qtyRemaining, 1);
 
     const project = await Project.create({ company: company._id, design: new mongoose.Types.ObjectId(), client: new mongoose.Types.ObjectId(), steps: [] });
@@ -121,7 +133,7 @@ describe('serial units', () => {
     unit = await setUnitStatus(company, unit.id, { status: 'returned' });
     unit = await setUnitStatus(company, unit.id, { status: 'inStock' });
     assert.equal(unit.status, 'inStock');
-    assert.equal(unit.soldInvoice, null);
+    assert.equal(unit.soldEwayBill, null);
     assert.equal((await Batch.findById(batch._id)).qtyRemaining, 2);
   });
 
@@ -130,7 +142,7 @@ describe('serial units', () => {
     await receive(p, { serials: ['B-1'], ...prices(16000) });
     await invoice([{ name: 'Battery', productId: p.id, serials: ['B-1'], priceType: 'retail', rate: 0 }]);
     await assert.rejects(invoice([{ name: 'Battery', productId: p.id, serials: ['B-1'], priceType: 'retail', rate: 0 }]), /Not in stock: B-1/);
-    assert.equal(await Invoice.countDocuments(), 1);
+    assert.equal(await EwayBill.countDocuments(), 1);
   });
 });
 
@@ -161,7 +173,7 @@ describe('warranty', () => {
     const p = await product({ name: 'Panel', isSerialized: true, warrantyMonths: 300 });
     await receive(p, { serials: ['W-1'], ...prices(13000) });
     const project = await Project.create({ company: company._id, design: new mongoose.Types.ObjectId(), client: new mongoose.Types.ObjectId(), steps: [] });
-    await invoice([{ name: 'Panel', productId: p.id, serials: ['W-1'], priceType: 'retail', rate: 0 }]);
+    await billedSale([{ name: 'Panel', productId: p.id, serials: ['W-1'], priceType: 'retail', rate: 0 }]);
     const [sold] = await listUnits(company, p.id);
     await setUnitStatus(company, sold.id, { status: 'installed', project: project.id, installDate: '2026-05-10' });
     const [unit] = await listUnits(company, p.id);
@@ -172,27 +184,27 @@ describe('warranty', () => {
   });
 });
 
-describe('invoice snapshot', () => {
+describe('document snapshot', () => {
   test('lines copy batch, serials, price type and rate; later batch edits do not change them', async () => {
     const p = await product();
     const older = await receive(p, { batchNo: 'A', qtyReceived: 3, receivedDate: day(1), ...prices(100) });
     await receive(p, { batchNo: 'B', qtyReceived: 10, receivedDate: day(5), ...prices(130) });
-    const { createdInvoice } = await invoice([{ name: 'DC cable', productId: p.id, qty: 5, priceType: 'wholesale', rate: 1, gstPercent: 0 }, { name: 'Labour', qty: 1, rate: 500, gstPercent: 0 }]);
-    const lines = createdInvoice.pricing.lines;
-    assert.deepEqual(lines.map((l) => [l.batchNo, l.qty, l.priceType, l.rate]), [['A', 3, 'wholesale', 90], ['B', 2, 'wholesale', 120], [undefined, 1, undefined, 500]]);
-    assert.equal(createdInvoice.total, 3 * 90 + 2 * 120 + 500); // the client's rate of 1 is ignored for stock lines
+    const sold = await invoice([{ name: 'DC cable', productId: p.id, qty: 5, priceType: 'wholesale', rate: 1, gstPercent: 0 }]);
+    const lines = sold.pricing.lines;
+    assert.deepEqual(lines.map((l) => [l.batchNo, l.qty, l.priceType, l.rate]), [['A', 3, 'wholesale', 90], ['B', 2, 'wholesale', 120]]);
+    assert.equal(sold.total, 3 * 90 + 2 * 120); // the client's rate of 1 is ignored for stock lines
 
     await updateBatch(company, older.id, { wholesalePrice: 999, batchNo: 'A-renamed' });
-    const stored = await Invoice.findById(createdInvoice.id).lean();
+    const stored = await EwayBill.findById(sold.id).lean();
     assert.deepEqual(stored.pricing.lines[0], lines[0]);
-    assert.equal(stored.total, createdInvoice.total);
+    assert.equal(stored.total, sold.total);
   });
 
-  test('no invoice and no stock change when a line fails', async () => {
+  test('no document and no stock change when a line fails', async () => {
     const p = await product();
     const b = await receive(p, { qtyReceived: 2, ...prices(100) });
     await assert.rejects(invoice([{ name: 'ok', productId: p.id, qty: 2, priceType: 'retail', rate: 0 }, { name: 'too many', productId: p.id, qty: 1, priceType: 'retail', rate: 0 }]), /Only 0/);
-    assert.equal(await Invoice.countDocuments(), 0);
+    assert.equal(await EwayBill.countDocuments(), 0);
     assert.equal((await Batch.findById(b._id)).qtyRemaining, 2);
   });
 });
@@ -244,7 +256,7 @@ describe('concurrent sales', () => {
     assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
     assert.match(results.find((r) => r.status === 'rejected').reason.message, /Only 4 Metre/);
     assert.equal((await Batch.findById(b._id)).qtyRemaining, 4);
-    assert.equal(await Invoice.countDocuments(), 1);
+    assert.equal(await EwayBill.countDocuments(), 1);
   });
 
   test('the atomic guard alone refuses a deduction the batch no longer covers', async () => {
@@ -260,7 +272,7 @@ describe('concurrent sales', () => {
     const sale = () => invoice([{ name: 'Inverter', productId: p.id, serials: ['ONE'], priceType: 'retail', rate: 0 }]);
     const results = await Promise.allSettled(Array.from({ length: 5 }, sale));
     assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
-    assert.equal(await Invoice.countDocuments(), 1);
+    assert.equal(await EwayBill.countDocuments(), 1);
     assert.equal(await SerialUnit.countDocuments({ status: 'sold' }), 1);
   });
 });

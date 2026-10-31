@@ -21,12 +21,17 @@ const CLIENT_TICKET = /^cticket-/; // client support attachments (company ↔ cl
 const DESIGN_VERSION = /^[0-9a-f]{24}-design-/; // archived quotation PDFs: <companyId>-design-<designId>-v-…
 const INVOICE_PDF = /^[0-9a-f]{24}-invoice-/; // archived tax invoices: <companyId>-invoice-<invoiceId>-…
 const RECEIPT_PDF = /^[0-9a-f]{24}-receipt-/; // payment receipts: <companyId>-receipt-<paymentId>-…
+const EWAY_BILL_PDF = /^[0-9a-f]{24}-ewaybill-/; // archived e-way bills: <companyId>-ewaybill-<ewayBillId>-…
+const SALE_BILL_PDF = /^[0-9a-f]{24}-salebill-/; // archived bills: <companyId>-salebill-<billId>-…
+const CREDIT_NOTE_PDF = /^[0-9a-f]{24}-creditnote-/; // archived credit notes: <companyId>-creditnote-<creditNoteId>-…
 const PRODUCT_DOC = /^[0-9a-f]{24}-proddoc-/; // product PDFs: <companyId>-proddoc-<productId>-…
 
 const STOCK_BILL = /^[0-9a-f]{24}-bill-/; // supplier bills: <companyId>-bill-<batchId>-…
 const LOAN_DOC = /^[0-9a-f]{24}-loandoc-/; // loan step documents: <companyId>-loandoc-<loanId>-…
+const SUBSIDY_DOC = /^[0-9a-f]{24}-subsidydoc-/; // subsidy step documents: <companyId>-subsidydoc-<subsidyId>-…
+const EXPENSE_BILL = /^[0-9a-f]{24}-expbill-/; // project expense bills: <companyId>-expbill-<expenseId>-…
 
-export const isProtected = (name) => LOAN_DOC.test(name) || STOCK_BILL.test(name) || DOC.test(name) || STEP.test(name) || TICKET.test(name) || CLIENT_TICKET.test(name) || DESIGN_VERSION.test(name) || INVOICE_PDF.test(name) || RECEIPT_PDF.test(name) || PRODUCT_DOC.test(name);
+export const isProtected = (name) => EXPENSE_BILL.test(name) || LOAN_DOC.test(name) || SUBSIDY_DOC.test(name) || STOCK_BILL.test(name) || DOC.test(name) || STEP.test(name) || TICKET.test(name) || CLIENT_TICKET.test(name) || DESIGN_VERSION.test(name) || INVOICE_PDF.test(name) || RECEIPT_PDF.test(name) || EWAY_BILL_PDF.test(name) || SALE_BILL_PDF.test(name) || CREDIT_NOTE_PDF.test(name) || PRODUCT_DOC.test(name);
 
 const key = () => crypto.createHash('sha256').update(`file-link:${env.jwtSecret}`).digest();
 const mac = (name, exp) => crypto.createHmac('sha256', key()).update(`${name}.${exp}`).digest('hex');
@@ -71,12 +76,16 @@ export async function assertCanOpen(user, name) {
     if (ticket) return;
   } else if (DESIGN_VERSION.test(name)) {
     if (mayView('proposals')) return;
-  } else if (INVOICE_PDF.test(name) || RECEIPT_PDF.test(name)) {
+  } else if (INVOICE_PDF.test(name) || RECEIPT_PDF.test(name) || EWAY_BILL_PDF.test(name) || SALE_BILL_PDF.test(name) || CREDIT_NOTE_PDF.test(name)) {
     if (mayView('finances')) return;
   } else if (STOCK_BILL.test(name)) {
     if (['inventory', 'finances'].some(mayView)) return;
   } else if (LOAN_DOC.test(name)) {
     if (mayView('loans')) return;
+  } else if (SUBSIDY_DOC.test(name)) {
+    if (mayView('subsidies')) return;
+  } else if (EXPENSE_BILL.test(name)) {
+    if (mayView('expenses')) return;
   } else if (PRODUCT_DOC.test(name)) {
     // whoever may see the catalog's products (see catalog.routes.js)
     if (['proposals', 'inventory', 'finances', 'tasks'].some(mayView)) return;

@@ -43,6 +43,11 @@ const metaLeadStatusSchema = mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Choosing this status on a lead asks for a date (a callback, a site visit…), so the lead can be found under "upcoming"
+    requiresDate: {
+      type: Boolean,
+      default: false,
+    },
     // Inactive statuses stay on existing leads but can no longer be chosen
     isActive: {
       type: Boolean,

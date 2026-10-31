@@ -39,6 +39,7 @@ export async function proposal(token) {
       summary: { address: design.summary?.address, kwp: design.summary?.kwp, panels: design.summary?.panels, annualKwh: design.summary?.annualKwh },
       pricing: design.summary?.pricing || null,
       total: totalOf(design),
+      subsidy: design.subsidy?.enabled ? { enabled: true, central: design.subsidy.central || 0, state: design.subsidy.state || 0 } : null,
       hasDesign: design.type !== 'quick' && Boolean(design.data?.sections?.length),
     },
   };

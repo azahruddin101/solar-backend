@@ -3,7 +3,9 @@ export const ROLES = { SUPERADMIN: 'superadmin', COMPANY: 'company', AGENT: 'age
 export const TENANT_ROLES = [ROLES.COMPANY, ROLES.AGENT, ROLES.CLIENT];
 export const COMPANY_STATUS = ['active', 'suspended'];
 export const PLANS = ['starter', 'growth', 'enterprise'];
-export const DESIGN_STATUS = ['draft', 'proposed', 'won', 'lost'];
+export const DESIGN_STATUS = ['draft', 'proposed', 'reproposed', 'negotiation', 'won', 'lost'];
+/** Sent to the client and still waiting on a decision (a quote, a revised quote, or one being haggled over). */
+export const OPEN_DESIGN_STATUS = ['proposed', 'reproposed', 'negotiation'];
 export const DESIGN_GRID_TYPES = ['on_grid', 'off_grid', 'hybrid'];
 /** Client portal response to a proposed design (stored on the design until cleared on re-proposal). */
 export const CLIENT_PROPOSAL_DECISION = ['accepted', 'rejected', 'changes_requested'];
@@ -20,6 +22,8 @@ export const AMC_VISIT_WORKFLOW = ['scheduled', ...AMC_REQUEST_STATUS];
 export const STEP_STATUS = ['pending', 'in_progress', 'done'];
 /** A client's loan: being processed, then approved/disbursed (completed) or rejected. Its steps use STEP_STATUS. */
 export const LOAN_STATUS = ['in_progress', 'completed', 'rejected'];
+/** A proposal's government subsidy file: being processed, then credited (completed) or rejected. Its steps use STEP_STATUS. */
+export const SUBSIDY_STATUS = ['in_progress', 'completed', 'rejected'];
 // How urgent an installation step is. The company sets it per step; 'medium' unless it says otherwise.
 export const STEP_PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 export const DEFAULT_STEP_PRIORITY = 'medium';
@@ -35,6 +39,16 @@ export const UNIT_STATUS = ['inStock', 'sold', 'installed', 'returned'];
 export const UNIT_TRANSITIONS = { inStock: ['sold', 'installed'], sold: ['installed', 'returned'], installed: ['returned'], returned: ['inStock'] };
 // Which batch price an invoice line is billed at (Batch.basePrice / wholesalePrice / retailPrice).
 export const PRICE_TYPES = ['base', 'wholesale', 'retail'];
+// The sale chain (services/ewayBill.service.js, bill.service.js): goods leave stock on an e-way bill, one or more
+// e-way bills plus service charges are paid on a bill, and an invoice consolidates the bills.
+export const EWAY_BILL_STATUS = ['open', 'billed', 'cancelled'];
+export const BILL_STATUS = ['paid', 'invoiced', 'void'];
+/** An invoice is `void` when it was struck off (its bills are free again); the number is never reused. */
+export const INVOICE_STATUS = ['issued', 'void'];
+/** `sale` is the invoice of a sale (made from bills); `amc_parts` bills parts replaced on an AMC visit and is not "the proposal's invoice". */
+export const INVOICE_KIND = ['sale', 'amc_parts'];
+export const TRANSPORT_MODES = ['road', 'rail', 'air', 'ship'];
+export const TRANSPORT_REASONS = ['supply', 'job_work', 'own_use', 'exhibition', 'others'];
 /** Default “per …” labels for catalog products; each company can change this list. */
 export const DEFAULT_PRODUCT_UNITS = ['Piece', 'Nos', 'Set', 'Metre', 'Foot', 'Kg', 'Box', 'Roll', 'Lot', 'Bundle'];
 /** Default job titles for field staff; each company can edit this list under Agent roles. */
@@ -87,6 +101,21 @@ export const DEFAULT_PARENT_CATEGORIES = [
   { name: 'Electricals', description: 'Inverters, cabling, protection and storage.', match: /inverter|wire|cabl|earth|acdb|dcdb|distribution|batter|storage|meter|mcb|mccb|spd|fuse|conduit|connector|lightning|electric/i },
 ];
 
+// Suggested expense reasons; each company edits its own list (Company.expenseReasons).
+export const DEFAULT_EXPENSE_REASONS = [
+  'Transport of material',
+  'Labour charges',
+  'Material purchase',
+  'Structure fabrication',
+  'Electrical work',
+  'Permits & net-metering fees',
+  'Travel & site visit',
+  'Tools & equipment',
+  'Food & accommodation',
+  'Repair / rework',
+];
+export const MAX_EXPENSE_REASONS = 50;
+
 // Suggested loan steps; each company edits its own list (Company.loanSteps).
 export const DEFAULT_LOAN_STEPS = [
   { name: 'Documents collected', description: 'ID proof, address proof, income proof, electricity bill and bank statements.' },
@@ -103,4 +132,15 @@ export const DEFAULT_INSTALLATION_STEPS = [
   { name: 'Structure installation', description: 'Mount the pillars and the module mounting structure.', role: 'Installer' },
   { name: 'Panel & electrical installation', description: 'Fix the panels, run DC/AC cabling, install the inverter and earthing.', role: 'Electrician' },
   { name: 'Testing & handover', description: 'Commission the system, net-meter paperwork and hand over to the client.', role: 'Inspector' },
+];
+
+// Suggested subsidy steps (the PM Surya Ghar flow); each company edits its own list (Company.subsidySteps). New companies start with them.
+export const DEFAULT_SUBSIDY_STEPS = [
+  { name: 'Documents collected', description: 'Aadhaar, electricity bill, bank account details and roof ownership proof.' },
+  { name: 'Registered on the portal', description: 'Client registered on the scheme portal with the DISCOM and consumer number.' },
+  { name: 'Application approved', description: 'Feasibility approval received from the electricity company (DISCOM).' },
+  { name: 'Installation reported', description: 'System installed and the installation details submitted on the portal.' },
+  { name: 'Net meter & inspection', description: 'Net meter fitted and the DISCOM inspection done.' },
+  { name: 'Commissioning & claim', description: 'Commissioning certificate issued and the subsidy claim submitted with the bank details.' },
+  { name: 'Subsidy credited', description: 'Subsidy received in the client’s bank account.' },
 ];

@@ -5,6 +5,8 @@ import { after, before, beforeEach, test } from 'node:test';
 import mongoose from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { Batch, Category, Client, Company, Design, Invoice, Product, Project, SerialUnit, Supplier } from '../src/models/index.js';
+import { markAmcPartsInvoices } from '../src/migrations/invoiceKind.migration.js';
+import { billingService } from '../src/services/billing.service.js';
 import { getAmcPartsInvoice, getAmcPartsInvoiceAsAgent, invoiceAmcParts, invoiceAmcPartsAsAgent } from '../src/services/project.service.js';
 import { receiveStock } from '../src/services/stock.service.js';
 
@@ -98,4 +100,58 @@ test('on their own side, staff only handle the parts of a visit assigned to them
   await assert.rejects(getAmcPartsInvoiceAsAgent(agent, project.id, unassigned), /not assigned to you/);
   await invoiceAmcPartsAsAgent(agent, project.id, visitId(), { lines: [{ productId: product.id, qty: 1 }] });
   assert.equal((await getAmcPartsInvoiceAsAgent(agent, project.id, visitId())).visit.name, 'AMC1');
+});
+
+const fuses = (qty = 2) => ({ lines: [{ productId: product.id, qty, priceType: 'retail' }], withGst: true });
+
+test('an AMC parts invoice is its own kind: it is not the proposal’s invoice and does not hide a missing sale invoice', async () => {
+  await Design.updateOne({ _id: project.design }, { $set: { summary: { pricing: { total: 100000 }, cost: 100000 } } }); // a priced, booked proposal
+  await invoiceAmcParts(company, owner, project.id, visitId(), fuses());
+  const invoice = await Invoice.findOne();
+  assert.equal(invoice.kind, 'amc_parts');
+  const ledger = await billingService.get(company, project.design);
+  assert.equal(ledger.invoice, null); // not the proposal's invoice
+  assert.equal(ledger.invoices.length, 1); // but it is listed
+  const overview = await billingService.overview(company);
+  assert.equal(overview[0].invoiceNo, '');
+  const { dashboard } = await import('../src/services/dashboard.service.js');
+  assert.equal((await dashboard(company)).attention.invoice.length, 1); // the booked proposal still has no sale invoice
+});
+
+test('the invoice, the stock and the visit are one commit: nothing is kept when recording it on the visit fails', async () => {
+  const original = Project.updateOne;
+  Project.updateOne = async () => ({ modifiedCount: 0 }); // the visit was invoiced by someone else a moment ago
+  try {
+    await assert.rejects(invoiceAmcParts(company, owner, project.id, visitId(), fuses(3)), /just invoiced/);
+  } finally {
+    Project.updateOne = original;
+  }
+  assert.equal(await Invoice.countDocuments(), 0); // the invoice was rolled back
+  assert.equal((await Batch.findOne({ product: product._id })).qtyRemaining, 10); // and so was the stock deduction
+  const saved = await Project.findById(project.id);
+  assert.equal(saved.logs.filter((l) => l.action === 'amc_parts_invoiced').length, 0);
+  assert.equal(saved.amcVisits[0].partsInvoice, null);
+  // a later attempt works and numbers the invoice from the start
+  const res = await invoiceAmcParts(company, owner, project.id, visitId(), fuses(3));
+  assert.equal(res.invoice.invoiceNo, 'INV-0001');
+  assert.equal((await Batch.findOne({ product: product._id })).qtyRemaining, 7);
+});
+
+test('two requests for the same visit at the same moment invoice it once and take the stock once', async () => {
+  const run = () => invoiceAmcParts(company, owner, project.id, visitId(), fuses(2));
+  const results = await Promise.allSettled([run(), run()]);
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.equal(await Invoice.countDocuments(), 1);
+  assert.equal((await Batch.findOne({ product: product._id })).qtyRemaining, 8);
+});
+
+test('the migration marks the AMC parts invoices issued before kinds existed, and leaves sale invoices alone', async () => {
+  await invoiceAmcParts(company, owner, project.id, visitId(), fuses());
+  const sale = await Invoice.create({ company: company._id, design: project.design, client: project.client, invoiceNo: 'INV-SALE', total: 5 });
+  await Invoice.collection.updateMany({}, { $unset: { kind: '' } }); // as they were stored before
+  await markAmcPartsInvoices();
+  assert.equal((await Invoice.findOne({ invoiceNo: sale.invoiceNo })).kind, 'sale');
+  const partsInvoice = await Invoice.collection.findOne({ _id: (await Project.findById(project.id)).amcVisits[0].partsInvoice });
+  assert.equal(partsInvoice.kind, 'amc_parts');
+  await markAmcPartsInvoices(); // running it again changes nothing
 });

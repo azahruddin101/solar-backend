@@ -1,6 +1,6 @@
 // AMC (Annual Maintenance Contract) templates on the company and scheduled visits on each installation.
 import { Company, Design, Project, User } from '../models/index.js';
-import { ROLES } from '../constants/index.js';
+import { OPEN_DESIGN_STATUS, ROLES } from '../constants/index.js';
 import { badRequest, notFound } from '../utils/HttpError.js';
 import { objectId } from '../utils/validators.js';
 import { cleanRichText } from '../utils/richText.js';
@@ -166,6 +166,45 @@ export function packageRowFromTemplate(t, selected, request = null) {
   };
 }
 
+/** One line in a visit's own log. `user` may be a staff/owner user, or null for the client / the system. */
+export function amcLog(visit, user, action, message = '') {
+  if (!visit.logs) visit.logs = [];
+  visit.logs.push({ action, by: user?._id || null, byName: user?.name || user?.email || (user === null ? 'Client' : 'System'), byRole: user?.role || '', message: String(message || '').trim().slice(0, 1000) });
+}
+
+/** The same line on the installation's activity log, so the job's timeline shows AMC events too. */
+function projectAmcLog(project, visit, user, action, message = '') {
+  if (!project?.logs) return;
+  project.logs.push({ action, step: null, stepName: visit.name || '', by: user?._id || null, byName: user?.name || user?.email || 'System', byRole: user?.role || '', message: String(message || '').trim().slice(0, 1000) });
+}
+
+/**
+ * Put `agent` on the visit. When someone else already held it, that is a reassignment: the earlier person is kept in
+ * previousAssignees, reassignedCount goes up and the log says who handed it to whom. Returns 'assigned' | 'reassigned' | null (no change).
+ */
+export function setVisitAssignee(project, visit, agent, user, at = new Date()) {
+  const agentId = agent?._id || agent?.id || null;
+  const agentName = agent?.name || agent?.email || agent?.assigneeName || '';
+  if (!agentId) return null;
+  if (visit.assignee && String(visit.assignee) === String(agentId)) return null;
+  const reassigned = Boolean(visit.assignee);
+  if (reassigned) {
+    visit.previousAssignees.push({ assignee: visit.assignee, assigneeName: visit.assigneeName || '', assignedAt: visit.assignedAt || null, replacedAt: at });
+    visit.reassignedCount = (visit.reassignedCount || 0) + 1;
+  }
+  const was = visit.assigneeName || '';
+  visit.assignee = agentId;
+  visit.assigneeName = agentName;
+  visit.assignedAt = at;
+  visit.assignedBy = user?._id || null;
+  visit.workflowStatus = 'assigned';
+  const action = reassigned ? 'amc_reassigned' : 'amc_assigned';
+  const message = reassigned ? `${was || 'Unassigned'} → ${agentName}` : agentName;
+  amcLog(visit, user, action, message);
+  projectAmcLog(project, visit, user, action, `${visit.name} — ${message}`);
+  return action;
+}
+
 function startOfDay(d) {
   const x = new Date(d);
   if (Number.isNaN(x.getTime())) throw badRequest('Choose a valid date');
@@ -218,7 +257,7 @@ function requestForVisit(design, visit) {
 }
 
 /** Mirror client AMC requests onto the installation as visit rows (before or after install completion). */
-export function syncDesignAmcRequestsToProject(design, project, company) {
+export function syncDesignAmcRequestsToProject(design, project, company, user = null) {
   if (!design?.amcRequests?.length || !project) return;
   const templates = company?.amcTemplates || [];
   for (const req of design.amcRequests) {
@@ -228,6 +267,9 @@ export function syncDesignAmcRequestsToProject(design, project, company) {
     const visit = visitForRequest(project, req);
     if (!visit) {
       project.amcVisits.push(visitFromClientRequest(tmpl, req));
+      const added = project.amcVisits[project.amcVisits.length - 1];
+      amcLog(added, req.requestedBy === 'company' ? user : null, 'amc_requested', `${tmpl.name} for ${startOfDay(req.requestedDate).toDateString()}${req.note ? ` — ${req.note}` : ''}`);
+      if (added.assignee) amcLog(added, user, 'amc_assigned', added.assigneeName || '');
       continue;
     }
     if (!visit.request) visit.request = req._id;
@@ -237,7 +279,8 @@ export function syncDesignAmcRequestsToProject(design, project, company) {
     visit.clientRequestedDate = when;
     visit.requestNote = req.note || '';
     visit.workflowStatus = req.status;
-    if (req.assignee) {
+    if (req.assignee && user) setVisitAssignee(project, visit, { _id: req.assignee, name: req.assigneeName || '' }, user, req.assignedAt || new Date());
+    else if (req.assignee) { // a read-time sync (no actor): mirror the booking quietly, never as a reassignment
       visit.assignee = req.assignee;
       visit.assigneeName = req.assigneeName || '';
       visit.assignedAt = req.assignedAt;
@@ -323,7 +366,7 @@ export async function submitClientAmcRequest({ company, design, packageName, req
 }
 
 function clientMayEditAmcOnDesign(design) {
-  return design.status === 'proposed' || design.status === 'won';
+  return OPEN_DESIGN_STATUS.includes(design.status) || design.status === 'won';
 }
 
 /** Company queue: client AMC requests awaiting assignment or in progress. */
@@ -394,7 +437,7 @@ export async function assignAmcRequest(company, user, designId, requestId, assig
   req.assignedBy = user._id;
   await design.save();
 
-  syncDesignAmcRequestsToProject(design, project, company);
+  syncDesignAmcRequestsToProject(design, project, company, user);
   await project.save();
 
   notifyAmcAssigned({
@@ -670,6 +713,11 @@ function visitRow(project, v, now) {
     requestNote: v.requestNote || '',
     booked: amcKind(v.kind) === 'mandatory' || Boolean(v.clientRequestedDate), // a mandatory visit is scheduled by the company; an optional one has the date it was requested for
     assignee: v.assignee ? { id: String(v.assignee), name: v.assigneeName || '' } : null,
+    assignedAt: v.assignedAt || null,
+    reassigned: (v.reassignedCount || 0) > 0,
+    reassignedCount: v.reassignedCount || 0,
+    previousAssignees: (v.previousAssignees || []).map((p) => ({ id: p.assignee ? String(p.assignee) : null, name: p.assigneeName || '', assignedAt: p.assignedAt || null, replacedAt: p.replacedAt || null })),
+    logs: [...(v.logs || [])].sort((a, b) => new Date(b.at) - new Date(a.at)).map((l) => ({ id: String(l._id), at: l.at, action: l.action, byName: l.byName || '', message: l.message || '' })),
     status: v.status,
     completedAt: v.completedAt || null,
     completedByName: v.completedByName || '',
@@ -773,11 +821,7 @@ export async function assignAmcVisit(company, user, projectId, visitId, assignee
   });
   if (!agent) throw badRequest('Choose an active staff member');
 
-  visit.assignee = agent._id;
-  visit.assigneeName = agent.name || agent.email;
-  visit.assignedAt = new Date();
-  visit.assignedBy = user._id;
-  visit.workflowStatus = 'assigned';
+  setVisitAssignee(project, visit, agent, user);
   await project.save();
 
   // keep the client's booking (shown in their portal) in step with the visit
@@ -827,13 +871,14 @@ export async function createAmcVisit(company, user, projectId, { name, date, not
   if (amcKind(tmpl.kind) === 'mandatory') {
     if ((project.amcVisits || []).some((v) => v.name === tmpl.name)) throw badRequest(`“${tmpl.name}” is already on this installation`);
     project.amcVisits.push({ ...visitFromTemplate(tmpl, when), dueDate: when, requestNote: trimmedNote });
-    await project.save();
     visit = project.amcVisits[project.amcVisits.length - 1];
+    amcLog(visit, user, 'amc_added', `${tmpl.name} for ${when.toDateString()}${trimmedNote ? ` — ${trimmedNote}` : ''}`);
+    await project.save();
   } else {
     design.amcRequests.push({ packageName: tmpl.name, requestedDate: when, note: trimmedNote, status: 'requested', requestedAt: new Date(), requestedBy: 'company' });
     const req = design.amcRequests[design.amcRequests.length - 1];
     await design.save();
-    syncDesignAmcRequestsToProject(design, project, company);
+    syncDesignAmcRequestsToProject(design, project, company, user);
     await project.save();
     visit = project.amcVisits.find((v) => v.request && String(v.request) === String(req._id));
   }

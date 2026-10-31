@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-// Running numbers per company (receipts, invoices): RCT-0001, RCT-0002…
+// Running numbers per company (e-way bills, bills, legacy invoices): EWB-0001, BILL-0001…
 const counterSchema = new mongoose.Schema({
   company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
   key: { type: String, required: true },

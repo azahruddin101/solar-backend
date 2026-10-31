@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { deleteClientTicketsForClient } from './clientTicket.service.js';
 import { ROLES } from '../constants/index.js';
-import { Client, Design, Invoice, Payment, Project, User } from '../models/index.js';
+import { Bill, Client, Design, EwayBill, Invoice, Payment, Project, User } from '../models/index.js';
 import { hasPermission } from '../middlewares/auth.middleware.js';
 import { deleteDesign } from './design.service.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
@@ -202,8 +202,8 @@ export async function updateClient(company, id, body) {
 }
 
 /**
- * Deleting a client also deletes the proposals (and installations) made for them — but never money records: a
- * client with any receipt or invoice can't be deleted. Because the delete reaches into proposals and installations,
+ * Deleting a client also deletes the proposals (and installations) made for them — but never money records or goods
+ * taken from stock: a client with any e-way bill (not cancelled), bill or invoice can't be deleted. Because the delete reaches into proposals and installations,
  * a staff member also needs the delete permission of those areas when the client has any.
  */
 export async function deleteClient(company, id, user) {
@@ -211,9 +211,12 @@ export async function deleteClient(company, id, user) {
   const scope = { company: company._id, client: client._id };
   const designs = await Design.find(scope).select('_id').lean();
   const designIds = designs.map((d) => d._id);
-  const billed = (await Payment.exists({ company: company._id, $or: [{ client: client._id }, { design: { $in: designIds } }] }))
-    || (await Invoice.exists({ company: company._id, $or: [{ client: client._id }, { design: { $in: designIds } }] }));
-  if (billed) throw badRequest('This client has receipts or invoices, so it cannot be deleted.');
+  const ofClient = { $or: [{ client: client._id }, { design: { $in: designIds } }] };
+  const billed = (await EwayBill.exists({ company: company._id, status: { $ne: 'cancelled' }, ...ofClient }))
+    || (await Payment.exists({ company: company._id, ...ofClient }))
+    || (await Bill.exists({ company: company._id, ...ofClient })) // a void bill is still a numbered document
+    || (await Invoice.exists({ company: company._id, ...ofClient }));
+  if (billed) throw badRequest('This client has e-way bills, bills or invoices, so it cannot be deleted. Cancel any open e-way bills first.');
   if (designIds.length && !hasPermission(user, 'proposals', 'delete')) {
     throw forbidden('This client has proposals. Deleting the client deletes them too, which needs the Proposals “Delete” permission.');
   }

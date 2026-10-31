@@ -28,6 +28,16 @@ const manualLeadSchema = mongoose.Schema(
     statusName: { type: String, default: '' },
     statusColor: { type: String, default: 'slate' },
     statusUpdatedAt: { type: Date },
+    scheduledAt: { type: Date, default: null }, // the date the current status booked (callback, visit…)
+    previousSchedules: { type: [{ scheduledAt: { type: Date }, statusName: { type: String, default: '' }, replacedAt: { type: Date, default: Date.now }, byName: { type: String, default: '' } }], default: [] }, // dates this lead had before, oldest first
+    rescheduledCount: { type: Number, default: 0 },
+    // every person who has held this lead, oldest first (endedAt null = holds it now); a hand-over sets isReassigned
+    assignmentHistory: { type: [{ assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, assigneeName: { type: String, default: '' }, assignedAt: { type: Date }, endedAt: { type: Date, default: null }, byName: { type: String, default: '' } }], default: [] },
+    isReassigned: { type: Boolean, default: false },
+    reassignedCount: { type: Number, default: 0 },
+    isRescheduled: { type: Boolean, default: false },
+    // what happened on this lead (assignments, hand-overs); status changes live in statusHistory
+    logs: { type: [{ action: { type: String, required: true }, message: { type: String, default: '' }, byName: { type: String, default: '' }, at: { type: Date, default: Date.now } }], default: [] },
     statusHistory: {
       type: [
         {
@@ -35,6 +45,8 @@ const manualLeadSchema = mongoose.Schema(
           statusName: { type: String, required: true },
           statusColor: { type: String, default: 'slate' },
           remark: { type: String, default: '' },
+          scheduledAt: { type: Date, default: null },
+          rescheduled: { type: Boolean, default: false }, // this change moved an earlier date
           changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
           changedByName: { type: String, default: '' },
           changedAt: { type: Date, default: Date.now },

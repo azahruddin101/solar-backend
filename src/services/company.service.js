@@ -1,7 +1,7 @@
 // Companies: the super admin's management operations and the company's own profile.
 import mongoose from 'mongoose';
 import { DEFAULT_AGENT_ROLES, DEFAULT_STEP_PRIORITY, ROLES, STEP_PRIORITIES } from '../constants/index.js';
-import { Batch, Category, Client, Company, Design, ParentCategory, Invoice, InstallationCharge, Payment, Counter, Package, Plan, Product, Project, SerialUnit, Supplier, User } from '../models/index.js';
+import { Client, Company, Design, Plan, Product, User } from '../models/index.js';
 import { applyPlanLimitsToCompany, planSummary } from './plan.service.js';
 import { parseInvoiceNumbering } from './invoiceNumber.service.js';
 import { assignPlanAsAdmin, ensureCompanySubscription, subscriptionView } from './subscription.service.js';
@@ -13,6 +13,7 @@ import { cleanRichText } from '../utils/richText.js';
 import { signToken } from '../utils/token.js';
 import { email as validEmail, objectId, password as validPassword } from '../utils/validators.js';
 import { deleteCompanyAssets } from './asset.service.js';
+import { deleteCompanyData } from './companyData.js';
 import { ownerCompanyView } from '../utils/companyView.js';
 import { newSessionId, registerSession, revokeUserSessions } from './session.service.js';
 import { deleteTicketsForCompany } from './ticket.service.js';
@@ -202,24 +203,7 @@ export async function impersonate(id, admin) {
 
 export async function deleteCompany(id) {
   const company = await getOrFail(id);
-  const filter = { company: company._id };
-  await Promise.all([
-    Project.deleteMany(filter),
-    Design.deleteMany(filter),
-    Client.deleteMany(filter),
-    Product.deleteMany(filter),
-    Batch.deleteMany(filter),
-    SerialUnit.deleteMany(filter),
-    Supplier.deleteMany(filter),
-    Category.deleteMany(filter),
-    ParentCategory.deleteMany(filter),
-    Package.deleteMany(filter),
-    InstallationCharge.deleteMany(filter),
-    Payment.deleteMany(filter),
-    Invoice.deleteMany(filter),
-    Counter.deleteMany(filter),
-    User.deleteMany(filter),
-  ]);
+  await deleteCompanyData(company._id);
   await deleteTicketsForCompany(company._id);
   await deleteClientTicketsForCompany(company._id);
   await company.deleteOne();

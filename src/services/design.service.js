@@ -1,8 +1,8 @@
 // Designs a company creates for its clients. `data` is the designer's saved state.
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
-import { CLIENT_PROJECT_TYPES, CLIENT_ROOF_TYPES, DESIGN_GRID_TYPES } from '../constants/index.js';
-import { Client, Design, DesignVersion, Invoice, Payment } from '../models/index.js';
+import { CLIENT_PROJECT_TYPES, CLIENT_ROOF_TYPES, DESIGN_GRID_TYPES, OPEN_DESIGN_STATUS } from '../constants/index.js';
+import { Bill, Client, Design, DesignVersion, EwayBill, Invoice, Payment } from '../models/index.js';
 import { badRequest, forbidden, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
@@ -11,9 +11,11 @@ import { totalOf } from './billing.service.js';
 import { deleteProjectsOf, moveDesignProject } from './project.service.js';
 import { deleteForDesign as deleteExpensesOfDesign } from './expense.service.js';
 import { closeLoanForDesign, deleteLoanOfDesign, moveLoanOfDesign, openLoanForDesign } from './loan.service.js';
+import { closeSubsidyForDesign, deleteSubsidyOfDesign, moveSubsidyOfDesign, openSubsidyForDesign } from './subsidy.service.js';
 import { deleteFile } from './storage.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
 import { dateRangeOnField } from '../utils/listFilters.js';
+import { designShowMatch } from './listPresets.js';
 
 const SUMMARY = ['address', 'kwp', 'panels', 'cost', 'annualKwh', 'pricing'];
 const DESIGN_SAVE_LOG_GAP_MS = 10 * 60 * 1000;
@@ -61,11 +63,11 @@ async function checkLimit(company) {
   };
 }
 
-/** Lists leave out the heavy `data`. Optional `from`/`to` (`YYYY-MM-DD`) filter on `createdAt`. */
-export async function listDesigns(company, { client, page, limit, from, to } = {}) {
+/** Lists leave out the heavy `data`. Optional `from`/`to` (`YYYY-MM-DD`) filter on `createdAt`; `show` is a dashboard preset (listPresets.js). */
+export async function listDesigns(company, { client, page, limit, from, to, show } = {}) {
   const match = { company: company._id };
   if (client) match.client = new mongoose.Types.ObjectId(objectId(client, 'Client'));
-  Object.assign(match, dateRangeOnField('createdAt', from, to) || {});
+  Object.assign(match, dateRangeOnField('createdAt', from, to) || {}, (await designShowMatch(company, show)) || {});
   const { page: p, limit: l, skip } = parsePagination({ page, limit });
   const [facet] = await Design.aggregate([
     { $match: match },
@@ -103,6 +105,12 @@ function cleanBillingExtras(body = {}) {
   if (body.cleaningCharge !== undefined) out.cleaningCharge = Math.max(0, Number(body.cleaningCharge) || 0);
   if (body.projectType !== undefined) out.projectType = CLIENT_PROJECT_TYPES.includes(body.projectType) ? body.projectType : 'residential';
   if (body.roofType !== undefined) out.roofType = CLIENT_ROOF_TYPES.includes(body.roofType) ? body.roofType : '';
+  if (body.subsidy !== undefined) {
+    const sub = body.subsidy && typeof body.subsidy === 'object' ? body.subsidy : {};
+    const amount = (v) => Math.max(0, Math.round((Number(v) || 0) * 100) / 100);
+    const enabled = Boolean(sub.enabled) && sub.enabled !== 'false';
+    out.subsidy = { enabled, central: enabled ? amount(sub.central) : 0, state: enabled ? amount(sub.state) : 0 };
+  }
   return out;
 }
 
@@ -208,16 +216,24 @@ export async function createDesign(company, user, body) {
   appendLog(design, user, 'design_created', name);
   await design.save();
   if (design.loanRequired) await openLoanForDesign(company, design, user);
+  if (design.subsidy?.enabled) await openSubsidyForDesign(company, design, user);
   return design.populate('client');
 }
 
 
-/** Whether money has been taken or billed on this proposal (receipts or an invoice). */
-const isBilled = async (company, design) => Boolean((await Payment.exists({ company: company._id, design: design._id })) || (await Invoice.exists({ company: company._id, design: design._id })));
+/**
+ * Whether the sale has started on this proposal: goods taken out of stock on an e-way bill that is not cancelled, or
+ * money taken or billed (a bill, a payment or an invoice). A cancelled e-way bill put its goods back and holds nothing.
+ */
+const isBilled = async (company, design) => Boolean(
+  (await EwayBill.exists({ company: company._id, design: design._id, status: { $ne: 'cancelled' } }))
+  || (await Payment.exists({ company: company._id, design: design._id }))
+  || (await Invoice.exists({ company: company._id, design: design._id })),
+);
 
 /**
- * A proposal with receipts or an invoice is a booked deal: its total, client and status are what the money was taken
- * against, so nobody — the owner included — can change them any more (editing the design without changing its total
+ * A proposal with an e-way bill, a bill or an invoice is a booked deal: its total, client and status are what the goods
+ * and money were taken against, so nobody — the owner included — can change them any more (editing the design without changing its total
  * still works, so the designer's autosave keeps working). To quote something different, duplicate the proposal.
  */
 async function assertBookedDealUnchanged(company, design, { status, client, summary }) {
@@ -227,7 +243,7 @@ async function assertBookedDealUnchanged(company, design, { status, client, summ
   if (!changesStatus && !changesClient && !changesTotal) return;
   if (!(await isBilled(company, design))) return;
   const what = changesTotal ? 'price' : changesClient ? 'client' : 'status';
-  throw badRequest(`This proposal has receipts or an invoice, so its ${what} can’t be changed. Duplicate it to quote something different.`);
+  throw badRequest(`This proposal has e-way bills, bills or an invoice, so its ${what} can’t be changed. Cancel its open e-way bills first, or duplicate the proposal to quote something different.`);
 }
 
 /** Changing a proposal's status or client needs those permissions on top of Edit (the owner has them all). */
@@ -243,19 +259,22 @@ export async function updateDesign(company, user, id, body) {
   const prevStatus = design.status;
   const prevName = design.name;
   const hadLoan = design.loanRequired;
+  const hadSubsidy = Boolean(design.subsidy?.enabled);
   Object.assign(design, pick(body, ['name', 'status']));
   Object.assign(design, cleanBillingExtras(body));
   if (hadLoan && !design.loanRequired) await closeLoanForDesign(company, design); // refuses once the loan is being processed
+  if (hadSubsidy && !design.subsidy?.enabled) await closeSubsidyForDesign(company, design); // refuses once the subsidy is being processed
   if (body?.validUntil !== undefined) design.validUntil = parseValidUntil(body.validUntil);
   if (body?.client !== undefined) {
     design.client = (await ownClient(company, body.client))._id;
     await moveDesignProject(design);
     await moveLoanOfDesign(design);
+    await moveSubsidyOfDesign(design);
     appendLog(design, user, 'design_client_changed', 'Client updated');
   }
   if (body?.status !== undefined && body.status !== prevStatus) {
     appendLog(design, user, 'design_status_changed', `${prevStatus} → ${body.status}`);
-    if (body.status === 'proposed') {
+    if (body.status === 'proposed' || body.status === 'reproposed') { // a (re)sent quote: the client answers afresh
       design.set('clientResponse', undefined);
       design.set('clientReviewInvite', undefined);
     }
@@ -276,8 +295,9 @@ export async function updateDesign(company, user, id, body) {
   }
   await design.save();
   if (!hadLoan && design.loanRequired) await openLoanForDesign(company, design, user);
+  if (!hadSubsidy && design.subsidy?.enabled) await openSubsidyForDesign(company, design, user);
   // the designer autosaves often — don't echo the whole document back
-  return { id: design.id, name: design.name, status: design.status, validUntil: design.validUntil, updatedAt: design.updatedAt, clientResponse: design.clientResponse, clientReviewInvite: design.clientReviewInvite, billingName: design.billingName, loanRequired: design.loanRequired, gridType: design.gridType, cleaningFrequency: design.cleaningFrequency, cleaningCharge: design.cleaningCharge };
+  return { id: design.id, name: design.name, status: design.status, validUntil: design.validUntil, updatedAt: design.updatedAt, clientResponse: design.clientResponse, clientReviewInvite: design.clientReviewInvite, billingName: design.billingName, loanRequired: design.loanRequired, gridType: design.gridType, cleaningFrequency: design.cleaningFrequency, cleaningCharge: design.cleaningCharge, subsidy: { enabled: Boolean(design.subsidy?.enabled), central: design.subsidy?.central || 0, state: design.subsidy?.state || 0 } };
 }
 
 const DEFAULT_REVIEW_MESSAGE = 'I have made the changes you requested. Please review the updated proposal.';
@@ -285,7 +305,7 @@ const DEFAULT_REVIEW_MESSAGE = 'I have made the changes you requested. Please re
 /** After editing, ask the client to review again (clears their pending change request). */
 export async function sendDesignForClientReview(company, user, id, { message } = {}) {
   const design = await getDesign(company, id);
-  if (design.status !== 'proposed') throw badRequest('Set the proposal to Proposed before asking the client to review it.');
+  if (!OPEN_DESIGN_STATUS.includes(design.status)) throw badRequest('Set the proposal to Proposed, Reproposed or Negotiation before asking the client to review it.');
   if (design.clientResponse?.decision !== 'changes_requested') throw badRequest('The client has not asked for changes on this proposal.');
 
   const note = String(message || '').trim() || DEFAULT_REVIEW_MESSAGE;
@@ -322,9 +342,10 @@ export async function duplicateDesign(company, user, id) {
 /** Deleting a design also deletes its installation and stored PDF versions. */
 export async function deleteDesign(company, id) {
   const design = await getDesign(company, id);
-  if (await isBilled(company, design)) throw badRequest('This proposal has receipts or an invoice, so it cannot be deleted');
+  if ((await isBilled(company, design)) || (await Bill.exists({ company: company._id, design: design._id }))) throw badRequest('This proposal has e-way bills, bills or an invoice, so it cannot be deleted. Cancel its open e-way bills first');
   await deleteProjectsOf({ design: design._id });
   await deleteLoanOfDesign(design._id);
+  await deleteSubsidyOfDesign(design._id);
   await deleteExpensesOfDesign(design._id);
   const versions = await DesignVersion.find({ design: design._id }).select('pdfName');
   await Promise.all(versions.map((v) => deleteFile(v.pdfName)));

@@ -34,8 +34,8 @@ test('every area has view, and every permission string is area:action', () => {
 });
 
 test('normalizing drops unknown permissions and brings view along', () => {
-  assert.deepEqual(normalizePermissions(['finances:create_receipt', 'nope:x', 'finances:create_receipt', 42]), ['finances:create_receipt', 'finances:view']);
-  assert.deepEqual(frontend.normalizePermissions(['finances:create_receipt', 'nope:x']), ['finances:create_receipt', 'finances:view']);
+  assert.deepEqual(normalizePermissions(['finances:create_bill', 'nope:x', 'finances:create_bill', 42]), ['finances:create_bill', 'finances:view']);
+  assert.deepEqual(frontend.normalizePermissions(['finances:create_bill', 'nope:x']), ['finances:create_bill', 'finances:view']);
   assert.deepEqual(normalizePermissions(undefined), []);
 });
 
@@ -43,7 +43,7 @@ test('migrating old grants keeps exactly the same access and never adds view', (
   for (const [old, now] of Object.entries(LEGACY_PERMISSION_MAP)) {
     assert.ok(now.every((p) => STAFF_PERMISSIONS.includes(p)), `${old} maps to an unknown permission`);
   }
-  assert.deepEqual(migrateLegacyPermissions(['billing:create']), ['finances:create_invoice', 'finances:create_receipt']);
+  assert.deepEqual(migrateLegacyPermissions(['billing:create']), ['finances:create_invoice']);
   assert.deepEqual(migrateLegacyPermissions(['designs:update', 'clients:update']), ['clients:manage_login', 'clients:update', 'proposals:change_client', 'proposals:change_status', 'proposals:share', 'proposals:update']);
   assert.deepEqual(migrateLegacyPermissions(['catalog:delete', 'installations:view', 'billing:update', 'garbage']), ['inventory:delete', 'tasks:view']);
   assert.deepEqual(migrateLegacyPermissions(['finances:view', 'designs:view']), ['finances:view', 'proposals:view']); // new-only names are kept
@@ -54,15 +54,15 @@ test('role templates only use real permissions', () => {
     assert.ok(t.permissions.every((p) => STAFF_PERMISSIONS.includes(p)), `${t.key} uses an unknown permission`);
   }
   const cashier = ROLE_TEMPLATES.find((t) => t.key === 'cashier');
-  assert.ok(cashier.permissions.includes('finances:create_receipt') && !cashier.permissions.includes('finances:create_invoice'));
+  assert.ok(cashier.permissions.includes('finances:create_bill') && !cashier.permissions.includes('finances:create_invoice'));
 });
 
 test('hasPermission: owner has everything, staff only their effective permissions, others nothing', () => {
   const owner = { role: 'company' };
-  const staff = { role: 'agent', permissions: ['finances:view'], effectivePermissions: ['finances:view', 'finances:create_receipt'] };
+  const staff = { role: 'agent', permissions: ['finances:view'], effectivePermissions: ['finances:view', 'finances:create_bill'] };
   const client = { role: 'client', permissions: ['finances:view'] };
-  assert.equal(hasPermission(owner, 'finances', 'remove_receipt'), true);
-  assert.equal(hasPermission(staff, 'finances', 'create_receipt'), true); // from a role
+  assert.equal(hasPermission(owner, 'finances', 'create_eway_bill'), true);
+  assert.equal(hasPermission(staff, 'finances', 'create_bill'), true); // from a role
   assert.equal(hasPermission(staff, 'finances', 'create_invoice'), false);
   assert.equal(hasPermission(client, 'finances', 'view'), false);
   assert.equal(hasAreaAccess(staff, 'finances'), true);
@@ -73,9 +73,21 @@ test('hasPermission: owner has everything, staff only their effective permission
 
 test('upgrading from version 2: Edit keeps covering what it covered before the split', () => {
   assert.deepEqual(upgradePermissions(['proposals:update', 'tasks:update', 'clients:view'], 2), ['clients:view', 'proposals:change_client', 'proposals:change_status', 'proposals:update', 'tasks:assign', 'tasks:change_status', 'tasks:update']);
-  assert.deepEqual(upgradePermissions(['proposals:view', 'finances:create_receipt'], 2), ['finances:create_receipt', 'proposals:view']); // nothing to split
+  assert.deepEqual(upgradePermissions(['proposals:view', 'finances:create_bill'], 2), ['finances:create_bill', 'proposals:view']); // nothing to split
   assert.deepEqual(upgradePermissions(['installations:update'], 1), ['tasks:assign', 'tasks:change_status', 'tasks:update']); // oldest names all the way
-  assert.deepEqual(upgradePermissions(['tasks:update'], 3), ['tasks:update']); // already current: untouched
+  assert.deepEqual(upgradePermissions(['tasks:update'], 5), ['tasks:update']); // already current: untouched
+});
+
+test('upgrading from version 3: whoever made invoices can now make the e-way bills and bills they are built from', () => {
+  assert.deepEqual(upgradePermissions(['finances:view', 'finances:create_invoice'], 3), ['finances:create_bill', 'finances:create_eway_bill', 'finances:create_invoice', 'finances:view']);
+  assert.deepEqual(upgradePermissions(['finances:view', 'finances:create_eway_bill'], 3), ['finances:create_eway_bill', 'finances:view']); // nothing to split
+  assert.deepEqual(upgradePermissions(['billing:create'], 1), ['finances:create_bill', 'finances:create_eway_bill', 'finances:create_invoice']); // oldest names all the way
+  assert.deepEqual(upgradePermissions(['finances:create_invoice'], 5), ['finances:create_invoice']);
+});
+
+test('upgrading from version 4: the receipt actions are gone (a bill is the payment), everything else stays', () => {
+  assert.deepEqual(upgradePermissions(['finances:view', 'finances:create_receipt', 'finances:remove_receipt', 'finances:create_bill'], 4), ['finances:create_bill', 'finances:view']);
+  assert.deepEqual(upgradePermissions(['billing:delete'], 1), []);
 });
 
 test('leads: View all brings the own-leads View along; Telecaller can change status but not assign or export', () => {

@@ -57,7 +57,7 @@ export async function companyView(user, company) {
   // currency/tariff/otherCostPerKw/productUnits/features are plain operational settings (not sensitive
   // business info like address or tax id), and several staff permissions (proposals, finances, inventory) need
   // them to work correctly — a staff session without them would show blank prices or the wrong currency.
-  if (user.role === ROLES.AGENT) return pick(payload, ['id', 'name', 'email', 'phone', 'logo', 'theme', 'currency', 'tariff', 'otherCostPerKw', 'productUnits', 'features']);
+  if (user.role === ROLES.AGENT) return pick(payload, ['id', 'name', 'email', 'phone', 'logo', 'theme', 'currency', 'tariff', 'otherCostPerKw', 'productUnits', 'expenseReasons', 'features']);
   if (user.role === ROLES.CLIENT) return pick(payload, ['id', 'name', 'email', 'phone', 'address', 'website', 'taxId', 'logo', 'signature', 'qr', 'qrLabel', 'tagline', 'signatoryName', 'signatoryTitle', 'theme', 'currency', 'pdfTerms', 'features']);
   return payload;
 }

@@ -43,6 +43,7 @@ async function sniffType(filePath, originalName = '') {
 const IMAGES = ['image/png', 'image/jpeg', 'image/webp'];
 const IMAGES_AND_PDF = [...IMAGES, 'application/pdf'];
 const LOAN_DOC_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'application/pdf': 'pdf', [XLSX]: 'xlsx', [XLS]: 'xls' };
+const LOAN_DOC_MESSAGE = 'Upload a PDF, a PNG / JPG / WebP image or an Excel file (XLSX, XLS)';
 
 const rand = (bytes) => crypto.randomBytes(bytes).toString('hex');
 const imageFilter = (req, file, cb) => (IMAGE_TYPES[file.mimetype] ? cb(null, true) : cb(badRequest('Upload a PNG, JPG or WebP image')));
@@ -145,6 +146,27 @@ export const uploadInvoicePdf = withStorage(
   ['application/pdf'],
 );
 
+/** Archived e-way bill PDF (the sale chain's first document). */
+export const uploadEwayBillPdf = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-ewaybill-${req.params.id}-${rand(8)}.pdf`,
+  ['application/pdf'],
+);
+
+/** Archived bill PDF (a paid bill of e-way bills and services; `-bill-` is the supplier's bill on a batch, so this is `-salebill-`). */
+export const uploadBillPdf = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-salebill-${req.params.id}-${rand(8)}.pdf`,
+  ['application/pdf'],
+);
+
+/** Archived credit note PDF (goods returned on a bill). */
+export const uploadCreditNotePdf = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-creditnote-${req.params.id}-${rand(8)}.pdf`,
+  ['application/pdf'],
+);
+
 /** The supplier's bill for a stock receipt: PNG, JPG, WebP or PDF, up to 20 MB. */
 export const uploadStockBill = withStorage(
   memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (TICKET_FILE_TYPES[file.mimetype] ? cb(null, true) : cb(badRequest('Upload a PNG, JPG, WebP image or a PDF')))).single('file'),
@@ -159,8 +181,15 @@ export const uploadProductDocument = withStorage(
   ['application/pdf'],
 );
 
+/** Bill proof for a project expense: PNG, JPG, WebP, PDF or Excel (XLSX / XLS), up to 20 MB. */
+export const uploadExpenseBill = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (/\.(pdf|png|jpe?g|webp|xlsx|xls)$/i.test(file.originalname || '') ? cb(null, true) : cb(badRequest(LOAN_DOC_MESSAGE)))).single('file'),
+  (req, file) => `${req.company.id}-expbill-${/^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : 'x'}-${rand(8)}.${LOAN_DOC_TYPES[file.mimetype]}`,
+  Object.keys(LOAN_DOC_TYPES),
+  'That file is not a valid PDF, PNG, JPG, WebP image or Excel file',
+);
+
 /** A document on a loan step: PNG, JPG, WebP, PDF or Excel (XLSX / XLS), up to 20 MB. */
-const LOAN_DOC_MESSAGE = 'Upload a PDF, a PNG / JPG / WebP image or an Excel file (XLSX, XLS)';
 export const uploadLoanDocument = withStorage(
   memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (/\.(pdf|png|jpe?g|webp|xlsx|xls)$/i.test(file.originalname || '') ? cb(null, true) : cb(badRequest(LOAN_DOC_MESSAGE)))).single('file'),
   (req, file) => `${req.company.id}-loandoc-${/^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : 'x'}-${rand(8)}.${LOAN_DOC_TYPES[file.mimetype]}`,
@@ -168,11 +197,12 @@ export const uploadLoanDocument = withStorage(
   'That file is not a valid PDF, PNG, JPG, WebP image or Excel file',
 );
 
-/** Payment receipt PDF (stored in S3 or local uploads). */
-export const uploadReceiptPdf = withStorage(
-  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
-  (req, file) => `${req.company.id}-receipt-${req.params.id}-${rand(8)}.pdf`,
-  ['application/pdf'],
+/** A document on a subsidy step: PNG, JPG, WebP, PDF or Excel (XLSX / XLS), up to 20 MB. */
+export const uploadSubsidyDocument = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (/\.(pdf|png|jpe?g|webp|xlsx|xls)$/i.test(file.originalname || '') ? cb(null, true) : cb(badRequest(LOAN_DOC_MESSAGE)))).single('file'),
+  (req, file) => `${req.company.id}-subsidydoc-${/^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : 'x'}-${rand(8)}.${LOAN_DOC_TYPES[file.mimetype]}`,
+  Object.keys(LOAN_DOC_TYPES),
+  'That file is not a valid PDF, PNG, JPG, WebP image or Excel file',
 );
 
 /** Support-ticket attachments: images or PDFs, up to 5 per message. */

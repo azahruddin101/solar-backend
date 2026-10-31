@@ -40,6 +40,7 @@ export const leadHandlers = {
   manual: require(path.join(root, 'controllers/manualLeadController.js')),
   manualPriority: setLeadPriority(require(path.join(root, 'models/ManualLead.js'))),
   allList: require(path.join(root, 'controllers/allLeadsController.js')).listAllLeads,
+  board: require(path.join(root, 'controllers/allLeadsController.js')).listLeadBoard,
 };
 export const { bindLeadsTenant } = require(path.join(root, 'middleware/tenant.js'));
 export const leadForm = require(path.join(root, 'utils/leadForm.js'));
@@ -50,6 +51,13 @@ export const leadModels = {
   status: require(path.join(root, 'models/MetaLeadStatus.js')),
 };
 export const leadAssignmentModel = require(path.join(root, 'models/MetaLeadAssignment.js'));
+// Every leads-integration model that belongs to one company (tenant): its leads, its Meta, Google Ads and Sheet
+// connections (with their encrypted tokens and keys) and the Meta sync and sign-in records. Deleting a company must
+// remove all of them; services/companyData.js uses this list and tests/companyDelete.test.js checks it is complete.
+export const leadCompanyModels = [
+  'MetaLead', 'GoogleLead', 'ManualLead', 'MetaLeadStatus', 'MetaLeadAssignment',
+  'MetaIntegration', 'GoogleAdsIntegration', 'SheetIntegration', 'MetaSyncJob', 'MetaOAuthState',
+].map((name) => require(path.join(root, `models/${name}.js`)));
 
 export function startLeadIntegrationWorkers() {
   require(path.join(root, 'workers/metaLeadWorker.js')).startMetaLeadWorker();

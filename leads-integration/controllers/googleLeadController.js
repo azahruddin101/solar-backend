@@ -5,6 +5,8 @@ const User = require('../models/User');
 const MetaLeadStatus = require('../models/MetaLeadStatus');
 const { buildSearchText } = require('../utils/leadSearchText');
 const { readPriorityFilter, priorityCondition } = require('../utils/leadPriority');
+const { readScheduledAt, rescheduleUpdate, statusLogEntry } = require('../utils/leadSchedule');
+const { applyLeadAssignments } = require('../utils/leadAssignment');
 const { resolveWebhookKey, resolveWebhookKeyFromPayload } = require('../services/googleAdsKey');
 const { leadCompanyFilter } = require('../utils/tenant');
 const { assignedScope } = require('../utils/leadScope');
@@ -143,10 +145,17 @@ const serializeLead = (lead) => ({
   currentStatus: lead.status
     ? { _id: lead.status._id, name: lead.statusName, color: lead.statusColor }
     : null,
+  scheduledAt: lead.scheduledAt || null,
+  isReassigned: Boolean(lead.isReassigned),
+  reassignedCount: lead.reassignedCount || 0,
+  assignmentHistory: (lead.assignmentHistory || []).map((h) => ({ id: h.assignee ? String(h.assignee) : null, name: h.assigneeName || '', assignedAt: h.assignedAt, endedAt: h.endedAt || null, byName: h.byName || '' })),
+  logs: (lead.logs || []).map((l) => ({ action: l.action, message: l.message || '', byName: l.byName || '', at: l.at })),
   statusHistory: (lead.statusHistory || []).map((entry) => ({
     statusName: entry.statusName,
     statusColor: entry.statusColor,
     remark: entry.remark,
+    scheduledAt: entry.scheduledAt || null,
+    rescheduled: Boolean(entry.rescheduled),
     changedAt: entry.changedAt,
   })),
 });
@@ -244,23 +253,14 @@ const assignGoogleLeads = async (req, res) => {
       ...assignedScope(req),
       _id: { $in: leadIds },
       isDeleted: false,
-    }).select('_id assignedTo convertedClient status').lean();
+    }).select('_id assignedTo assignedAt assignmentHistory convertedClient status').populate('assignedTo', 'name email').lean();
     const targetId = counsellor ? String(counsellor._id) : '';
-    const toChange = leads.filter((lead) => String(lead.assignedTo || '') !== targetId);
+    const toChange = leads.filter((lead) => String(lead.assignedTo?._id || '') !== targetId);
     const lock = await assertLeadsAssignmentMutable(req.leadsCompanyId, toChange);
     if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
     const changeIds = toChange.map((lead) => lead._id);
 
-    if (changeIds.length > 0) {
-      if (counsellor) {
-        await GoogleLead.updateMany(
-          { ...leadCompanyFilter(req.leadsCompanyId), _id: { $in: changeIds } },
-          { $set: { assignedTo: counsellor._id, assignedAt: new Date() } }
-        );
-      } else {
-        await GoogleLead.updateMany({ ...leadCompanyFilter(req.leadsCompanyId), _id: { $in: changeIds } }, { $unset: { assignedTo: 1, assignedAt: 1 } });
-      }
-    }
+    await applyLeadAssignments(GoogleLead, leadCompanyFilter(req.leadsCompanyId), toChange, counsellor, req.user); // history, flags and log per lead
 
     log('GOOGLE_ADS_LEADS_ASSIGNED', { userId: String(req.user._id), counsellorId: targetId || null, count: changeIds.length });
 
@@ -291,28 +291,35 @@ const updateGoogleLeadStatus = async (req, res) => {
   try {
     const status = await MetaLeadStatus.findOne({ ...leadCompanyFilter(req.leadsCompanyId), _id: body.statusId, isActive: true, isDeleted: { $ne: true } }).lean();
     if (!status) return res.status(404).json({ message: 'Status not found' });
+    const { scheduledAt, error: dateError } = readScheduledAt(body, status);
+    if (dateError) return res.status(400).json({ message: dateError });
 
     const existing = await GoogleLead.findOne({
       ...leadCompanyFilter(req.leadsCompanyId),
       ...assignedScope(req),
       _id: id,
       isDeleted: false,
-    }).select('convertedClient status').lean();
+    }).select('convertedClient status scheduledAt rescheduledCount').lean();
     if (!existing) return res.status(404).json({ message: 'Lead not found' });
     const lock = await assertLeadStatusMutable(req.leadsCompanyId, existing);
     if (!lock.ok) return res.status(lock.status).json({ message: lock.message });
 
     const now = new Date();
+    const move = rescheduleUpdate(existing, scheduledAt, { statusName: status.name, byName: req.user.name || req.user.email || '', at: now });
     const lead = await GoogleLead.findOneAndUpdate(
       { ...leadCompanyFilter(req.leadsCompanyId), ...assignedScope(req), _id: id, isDeleted: false },
       {
-        $set: { status: status._id, statusName: status.name, statusColor: status.color, statusUpdatedAt: now },
+        $set: { status: status._id, statusName: status.name, statusColor: status.color, statusUpdatedAt: now, scheduledAt, ...move.set },
         $push: {
+          ...move.push,
+          logs: statusLogEntry({ status, scheduledAt, remark, rescheduled: move.rescheduled, byName: req.user.name || req.user.email || '', at: now }),
           statusHistory: {
             status: status._id,
             statusName: status.name,
             statusColor: status.color,
             remark,
+            scheduledAt,
+            rescheduled: move.rescheduled,
             changedBy: req.user._id,
             changedAt: now,
           },

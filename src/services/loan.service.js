@@ -4,6 +4,7 @@
 import path from 'node:path';
 import { Client, Design, Loan } from '../models/index.js';
 import { badRequest, notFound } from '../utils/HttpError.js';
+import { monthlyEmi } from '../utils/emi.js';
 import { escapeRe } from '../utils/listFilters.js';
 import { objectId } from '../utils/validators.js';
 import { deleteFile } from './storage.service.js';
@@ -121,8 +122,17 @@ export async function getLoanOfDesign(company, designId) {
 /** Lender, amount, private notes and the overall status. */
 export async function updateLoan(company, user, id, body) {
   const loan = await getLoanDoc(company, id);
-  for (const key of ['lender', 'notes']) if (body[key] !== undefined) loan[key] = body[key];
-  if (body.amount !== undefined) loan.amount = body.amount;
+  for (const key of ['lender', 'branch', 'accountRef', 'notes']) if (body[key] !== undefined) loan[key] = body[key];
+  if (body.ifsc !== undefined) loan.ifsc = String(body.ifsc || '').trim().toUpperCase();
+  for (const key of ['amount', 'interestRate', 'tenureMonths', 'emi', 'downPayment', 'processingFee']) if (body[key] !== undefined) loan[key] = body[key];
+  // the amount, rate or period changed and no EMI came with it (and none is stored): work it out. An EMI that is sent, even a
+  // blank one, or already stored is kept as it is.
+  if (body.emi === undefined && !(loan.emi > 0) && ['amount', 'interestRate', 'tenureMonths'].some((k) => body[k] !== undefined)) loan.emi = monthlyEmi(loan.amount, loan.interestRate, loan.tenureMonths) || null;
+  for (const key of ['sanctionedOn', 'disbursedOn']) {
+    if (body[key] === undefined) continue;
+    const d = body[key] ? new Date(body[key]) : null;
+    loan[key] = d && !Number.isNaN(d.getTime()) ? d : null;
+  }
   if (body.status && body.status !== loan.status) {
     loan.status = body.status;
     appendLog(loan, user, 'status_changed', '', body.status);
