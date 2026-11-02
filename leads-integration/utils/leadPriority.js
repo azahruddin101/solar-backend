@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const { leadCompanyFilter } = require('./tenant');
-const { assignedScope } = require('./leadScope');
+const { assignedWriteScope } = require('./leadScope');
 
 // Reads the ?priority= list filter: 'true' (priority leads only), 'false' (the rest), or empty (all).
 const readPriorityFilter = (value) => {
@@ -24,7 +24,7 @@ const setLeadPriority = (Model, scope = () => ({})) => async (req, res) => {
 
   try {
     const lead = await Model.findOneAndUpdate(
-      { ...scope(req), _id: req.params.id, isDeleted: { $ne: true }, ...assignedScope(req), ...leadCompanyFilter(req.leadsCompanyId) },
+      { ...scope(req), _id: req.params.id, isDeleted: { $ne: true }, ...assignedWriteScope(req), ...leadCompanyFilter(req.leadsCompanyId) },
       { $set: { isPriority } },
       { returnDocument: 'after' }
     ).select('_id isPriority').lean();

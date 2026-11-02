@@ -19,6 +19,7 @@ export const PERMISSION_CATALOG = {
     description: 'Meta, Google Ads and manually added leads — staff see the leads assigned to them unless they may view all',
     actions: {
       view: 'Assigned to them',
+      view_team: 'Their team',
       view_all: 'View all',
       create: 'Add & import',
       change_status: 'Change status',
@@ -45,6 +46,7 @@ export const PERMISSION_CATALOG = {
     description: 'Client records',
     actions: {
       view: 'View',
+      view_team: 'Their team’s clients',
       create: 'Create',
       update: 'Edit',
       manage_login: 'Portal login',
@@ -76,6 +78,7 @@ export const PERMISSION_CATALOG = {
     description: 'Every installation, its steps and AMC visits — staff always see the steps and visits assigned to them',
     actions: {
       view: 'View all',
+      view_team: 'Their team’s installations',
       create: 'Start',
       update: 'Edit steps',
       assign: 'Assign steps',
@@ -137,14 +140,25 @@ export const STAFF_PERMISSIONS = PERMISSION_AREAS.flatMap((area) => Object.keys(
 const VALID = new Set(STAFF_PERMISSIONS);
 export const isPermission = (p) => VALID.has(p);
 
-/** Unique, valid, sorted — and every action brings its area's `view` along. */
+/**
+ * Areas where a plain `view` means "everything in the branch" and `view_team` the narrower "their team's". There, a
+ * team scope must never bring the broad `view` along (it would silently undo the restriction); elsewhere (leads,
+ * where `view` is only "assigned to me") it does.
+ */
+export const TEAM_SCOPED_AREAS = ['clients', 'tasks'];
+
+/**
+ * Unique, valid, sorted. Any action brings its area's `view` along - except in a team-scoped area held with
+ * `view_team`, where the team scope is the visibility. `view_all` implies `view_team`.
+ */
 export function normalizePermissions(list) {
-  const out = new Set();
-  for (const raw of Array.isArray(list) ? list : []) {
-    const p = String(raw ?? '').trim();
-    if (!VALID.has(p)) continue;
-    out.add(p);
-    out.add(`${p.split(':')[0]}:view`);
+  const given = new Set((Array.isArray(list) ? list : []).map((raw) => String(raw ?? '').trim()).filter((p) => VALID.has(p)));
+  for (const p of [...given]) if (p.endsWith(':view_all')) given.add(p.replace(/:view_all$/, ':view_team'));
+  const out = new Set(given);
+  for (const p of given) {
+    const [area] = p.split(':');
+    const teamOnly = TEAM_SCOPED_AREAS.includes(area) && given.has(`${area}:view_team`);
+    if (!teamOnly) out.add(`${area}:view`);
   }
   return [...out].sort();
 }
@@ -203,6 +217,12 @@ export const ROLE_TEMPLATES = [
     permissions: ['inventory:view', 'inventory:create', 'inventory:update', 'finances:view', 'finances:create_eway_bill'],
   },
   {
+    key: 'area_manager',
+    name: 'Area manager',
+    description: 'Sees leads, clients and installations for staff who report to them.',
+    permissions: ['leads:view_team', 'leads:change_status', 'leads:assign', 'clients:view_team', 'tasks:view_team', 'tasks:change_status', 'tasks:assign'],
+  },
+  {
     key: 'supervisor',
     name: 'Installation supervisor',
     description: 'Starts installations and manages their steps.',
@@ -250,8 +270,10 @@ export const LEGACY_PERMISSION_MAP = {
  *  - v3 → v4: invoices used to be made straight from a proposal; now goods go out on an e-way bill and are paid on a
  *    bill first, so whoever could create invoices can also create e-way bills and bills.
  *  - v4 → v5: receipts were removed (a bill is the payment), so "Record payment" and "Remove receipt" are dropped.
+ *  - v5 → v6: "Their team" (clients, installations) used to bring "View all" along, which undid the restriction; lists
+ *    holding both lose "View all" - the team scope is what was granted.
  */
-export const PERMISSIONS_VERSION = 5;
+export const PERMISSIONS_VERSION = 6;
 
 const V3_SPLITS = {
   'proposals:update': ['proposals:change_status', 'proposals:change_client'],
@@ -266,6 +288,7 @@ export function upgradePermissions(list, version = 1) {
   let out = version < 2 ? migrateLegacyPermissions(list) : [...new Set((Array.isArray(list) ? list : []).filter((p) => VALID.has(p)))];
   if (version < 3) out = [...new Set([...out, ...out.flatMap((p) => V3_SPLITS[p] || [])])];
   if (version < 4) out = [...new Set([...out, ...out.flatMap((p) => V4_SPLITS[p] || [])])];
+  if (version < 6) out = out.filter((p) => !TEAM_SCOPED_AREAS.some((area) => p === `${area}:view` && out.includes(`${area}:view_team`)));
   return out.filter((p) => VALID.has(p)).sort(); // names dropped since (v5: the receipt actions) fall away
 }
 

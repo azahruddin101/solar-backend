@@ -2,9 +2,9 @@ import { Company, Plan } from '../models/index.js';
 import { applyPlanLimitsToCompany } from '../services/plan.service.js';
 
 const DEFAULTS = [
-  { code: 'basic', name: 'Basic', description: 'For small teams getting started.', kind: 'fixed', priceMonthly: 30, maxClients: 25, maxDesigns: 50, maxConcurrentLogins: 2, selfServe: true, sortOrder: 1 },
-  { code: 'pro', name: 'Pro', description: 'More clients, designs and devices.', kind: 'fixed', priceMonthly: 60, maxClients: 100, maxDesigns: 200, maxConcurrentLogins: 5, selfServe: true, sortOrder: 2 },
-  { code: 'custom', name: 'Custom', description: 'Limits and pricing set by the platform admin (Hotstar-style).', kind: 'custom', priceMonthly: 0, maxClients: 1000, maxDesigns: 2000, maxConcurrentLogins: 5, selfServe: false, sortOrder: 3 },
+  { code: 'basic', name: 'Basic', description: 'For small teams getting started.', kind: 'fixed', priceMonthly: 30, maxConcurrentLogins: 2, selfServe: true, sortOrder: 1 },
+  { code: 'pro', name: 'Pro', description: 'More devices signed in at once.', kind: 'fixed', priceMonthly: 60, maxConcurrentLogins: 5, selfServe: true, sortOrder: 2 },
+  { code: 'custom', name: 'Custom', description: 'Limits and pricing set by the platform admin (Hotstar-style).', kind: 'custom', priceMonthly: 0, maxConcurrentLogins: 5, selfServe: false, sortOrder: 3 },
 ];
 
 const LEGACY_MAP = { starter: 'basic', growth: 'pro', enterprise: 'custom' };

@@ -5,13 +5,17 @@ import { Router } from 'express';
 import { ROLES } from '../constants/index.js';
 import { hasPermission, permissionOnly, requireRole } from '../middlewares/auth.middleware.js';
 import { bindLeadsTenant, leadAssignmentModel, leadHandlers as h, leadModels } from '../integrations/leads.js';
+import { assignedWriteScope } from '../../leads-integration/utils/leadScope.js';
+import { convertedStatusIds } from '../../leads-integration/utils/convertedLast.js';
 import { Client, User } from '../models/index.js';
 import { attachPermissions, effectiveFrom, rolesById } from '../services/permission.service.js';
 import multer from 'multer';
 import { rateLimit } from '../middlewares/rateLimit.middleware.js';
 
 const router = Router();
-const view = permissionOnly('leads', 'view', 'view_all');
+import { resolveLeadAssigneeScope, leadAssignedFilter } from '../services/dataScope.service.js';
+
+const view = permissionOnly('leads', 'view', 'view_all', 'view_team');
 const status = permissionOnly('leads', 'change_status');
 const update = permissionOnly('leads', 'update');
 const assign = permissionOnly('leads', 'assign');
@@ -29,13 +33,21 @@ const readSheet = (req, res, next) => sheetUpload.single('file')(req, res, (erro
   res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'The file must be 5 MB or smaller' : 'Upload a CSV or Excel file' });
 });
 
-/** Staff without "View all": every query and change below is limited to the leads assigned to them. */
-function scopeToOwnLeads(req, res, next) {
-  if (!hasPermission(req.user, 'leads', 'view_all')) req.leadsAssignedTo = req.user._id;
+/** Staff without "View all": limit to own leads or team when view_team is granted. */
+async function scopeToOwnLeads(req, res, next) {
+  if (hasPermission(req.user, 'leads', 'view_all')) return next();
+  const scope = await resolveLeadAssigneeScope(req.user);
+  if (scope && typeof scope === 'object' && scope.$in) {
+    req.leadsAssignedScope = scope;
+    req.leadsAssignedTo = null;
+  } else {
+    req.leadsAssignedTo = scope;
+    req.leadsAssignedScope = null;
+  }
   next();
 }
 
-const canHoldLeads = (perms) => perms.includes('leads:view') || perms.includes('leads:view_all');
+const canHoldLeads = (perms) => perms.includes('leads:view') || perms.includes('leads:view_all') || perms.includes('leads:view_team');
 
 /** Who leads can be assigned to: active staff of this company whose roles let them work on leads. */
 async function leadStaff(company) {
@@ -101,14 +113,23 @@ const QUICK_ASSIGN = {
   manual: { model: leadModels.manual, base: {}, order: { createdAt: 1, _id: 1 }, handler: h.manual.assignManualLeads },
 };
 const MAX_QUICK_ASSIGN = 500;
-const unassignedFilter = (req, source) => ({
-  ...QUICK_ASSIGN[source].base,
-  company: req.company._id,
-  isDeleted: false,
-  assignedTo: null, // no one (missing or cleared)
-  // staff who only see their own leads never see unassigned ones
-  ...(req.leadsAssignedTo ? { _id: null } : {}),
-});
+/**
+ * Leads quick assign may pick: unassigned, and not converted (a converted lead is locked - the assign handler would
+ * refuse it, and since the oldest go first one such lead would block every quick assign).
+ */
+const unassignedFilter = async (req, source) => {
+  const converted = await convertedStatusIds(req.company._id);
+  return {
+    ...QUICK_ASSIGN[source].base,
+    company: req.company._id,
+    isDeleted: false,
+    assignedTo: null, // no one (missing or cleared)
+    convertedClient: null,
+    ...(converted.length ? { status: { $nin: converted }, adminStatus: { $nin: converted } } : {}),
+    // staff who only see their own leads never see unassigned ones
+    ...(req.leadsAssignedTo || req.leadsAssignedScope ? { _id: null } : {}),
+  };
+};
 const QUICK_ASSIGN_SOURCES = Object.keys(QUICK_ASSIGN);
 
 /** ?sources=meta,google or body.sources — defaults to all three. */
@@ -126,7 +147,7 @@ async function pickUnassignedAcrossSources(req, count, sourceKeys = QUICK_ASSIGN
   const entries = [];
   for (const source of sourceKeys) {
     const { model, order } = QUICK_ASSIGN[source];
-    const rows = await model.find(unassignedFilter(req, source)).sort(order).select('createdAt leadCreatedAt').lean();
+    const rows = await model.find(await unassignedFilter(req, source)).sort(order).select('createdAt leadCreatedAt').lean();
     for (const row of rows) {
       entries.push({ source, id: String(row._id), at: row.leadCreatedAt || row.createdAt });
     }
@@ -152,11 +173,11 @@ const runAssignHandler = (handler, req, leadIds) => new Promise((resolve, reject
 });
 
 router.get('/all/unassigned-count', assign, async (req, res) => {
-  if (req.leadsAssignedTo) return res.json({ unassigned: 0 });
+  if (req.leadsAssignedTo || req.leadsAssignedScope) return res.json({ unassigned: 0 });
   const sourceKeys = quickAssignSources(req);
   if (!sourceKeys.length) return res.json({ unassigned: 0 });
   const counts = await Promise.all(
-    sourceKeys.map((source) => QUICK_ASSIGN[source].model.countDocuments(unassignedFilter(req, source))),
+    sourceKeys.map(async (source) => QUICK_ASSIGN[source].model.countDocuments(await unassignedFilter(req, source))),
   );
   res.json({ unassigned: counts.reduce((sum, n) => sum + n, 0) });
 });
@@ -168,7 +189,7 @@ router.post('/all/assign-unassigned', assign, resolveAssignee, async (req, res) 
   if (!Number.isInteger(count) || count < 1) return res.status(400).json({ error: 'Enter how many leads to assign (1 or more)' });
   if (count > MAX_QUICK_ASSIGN) return res.status(400).json({ error: `You can assign up to ${MAX_QUICK_ASSIGN} leads at a time` });
   const available = (await Promise.all(
-    sourceKeys.map((source) => QUICK_ASSIGN[source].model.countDocuments(unassignedFilter(req, source))),
+    sourceKeys.map(async (source) => QUICK_ASSIGN[source].model.countDocuments(await unassignedFilter(req, source))),
   )).reduce((sum, n) => sum + n, 0);
   if (count > available) {
     return res.status(400).json({ error: available ? `Only ${available} lead${available === 1 ? ' is' : 's are'} unassigned` : 'There are no unassigned leads in the sources you chose' });
@@ -190,7 +211,7 @@ router.post('/all/assign-unassigned', assign, resolveAssignee, async (req, res) 
 
 for (const source of Object.keys(QUICK_ASSIGN)) {
   router.get(`/${source}/unassigned-count`, assign, async (req, res) => {
-    res.json({ unassigned: await QUICK_ASSIGN[source].model.countDocuments(unassignedFilter(req, source)) });
+    res.json({ unassigned: await QUICK_ASSIGN[source].model.countDocuments(await unassignedFilter(req, source)) });
   });
   router.post(`/${source}/assign-unassigned`, assign, resolveAssignee, async (req, res, next) => {
     const count = Number(req.body?.count);
@@ -198,7 +219,7 @@ for (const source of Object.keys(QUICK_ASSIGN)) {
     if (!Number.isInteger(count) || count < 1) return res.status(400).json({ error: 'Enter how many leads to assign (1 or more)' });
     if (count > MAX_QUICK_ASSIGN) return res.status(400).json({ error: `You can assign up to ${MAX_QUICK_ASSIGN} leads at a time` });
     const { model, order, handler } = QUICK_ASSIGN[source];
-    const filter = unassignedFilter(req, source);
+    const filter = await unassignedFilter(req, source);
     const available = await model.countDocuments(filter);
     if (count > available) return res.status(400).json({ error: available ? `Only ${available} lead${available === 1 ? ' is' : 's are'} unassigned` : 'There are no unassigned leads' });
     const picked = await model.find(filter).sort(order).limit(count).select('_id').lean();
@@ -219,7 +240,7 @@ router.put('/:source/:id/converted', status, async (req, res) => {
   if (!/^[0-9a-f]{24}$/i.test(id)) return res.status(404).json({ error: 'Lead not found' });
   const client = /^[0-9a-f]{24}$/i.test(clientId) ? await Client.findOne({ _id: clientId, company: req.company._id }).select('name').lean() : null;
   if (!client) return res.status(400).json({ error: 'Client not found' });
-  const scope = { _id: id, company: req.company._id, isDeleted: { $ne: true }, ...(req.leadsAssignedTo ? { assignedTo: req.leadsAssignedTo } : {}) };
+  const scope = { _id: id, company: req.company._id, isDeleted: { $ne: true }, ...assignedWriteScope(req) }; // only a lead they hold now
   const lead = await Model.findOne(scope).lean();
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
   if (lead.convertedClient) return res.status(409).json({ error: `This lead was already converted to ${lead.convertedClientName || 'a client'}` });
@@ -236,7 +257,7 @@ router.put('/:source/:id/converted', status, async (req, res) => {
 });
 
 // performance of the people working on leads: the owner's report
-const ownerOnly = requireRole(ROLES.COMPANY);
+const ownerOnly = requireRole(ROLES.BRANCH, ROLES.COMPANY);
 router.get('/reports/telecallers', ownerOnly, async (req, res, next) => {
   req.leadStaffIds = (await leadStaff(req.company)).map((u) => u._id);
   next();

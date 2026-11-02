@@ -29,13 +29,24 @@ try {
   console.log('Demo companies');
   await seedDemoData();
 
-  console.log('\nSign-ins');
-  console.log(`  Super admin  ${env.superAdminEmail}  /  ${env.superAdminPassword}`);
+  console.log(`\nSign-ins (demo password: ${DEMO_PASSWORD})`);
+  console.log(`  Super admin     ${env.superAdminEmail}  /  ${env.superAdminPassword}`);
   for (const c of COMPANIES) {
-    console.log(`  Company      ${c.login.email}  /  ${DEMO_PASSWORD}${c.company.status === 'suspended' ? '  (suspended)' : ''}`);
+    const suspended = c.company.status === 'suspended' ? '  (suspended)' : '';
+    if (c.hasBranches) {
+      console.log(`  Company admin   ${c.login.email}  /  ${DEMO_PASSWORD}  →  /org  (${c.company.name})${suspended}`);
+      console.log(`  Branch owner    ${c.branchOwner.email}  /  ${DEMO_PASSWORD}  →  ${c.branchName}`);
+    } else {
+      console.log(`  Owner           ${c.login.email}  /  ${DEMO_PASSWORD}  →  /dashboard  (${c.company.name}, no branches)${suspended}`);
+    }
+    if (c.extraBranches?.length) {
+      for (const b of c.extraBranches) {
+        if (b.ownerEmail) console.log(`  Branch owner    ${b.ownerEmail}  /  ${DEMO_PASSWORD}  →  ${b.name}`);
+      }
+    }
     if (c.agents?.length) {
       for (const a of c.agents) {
-        console.log(`    Agent      ${a.email}  /  ${DEMO_PASSWORD} (${a.name} · ${a.jobTitle})`);
+        console.log(`    Staff         ${a.email}  /  ${DEMO_PASSWORD} (${a.name})`);
       }
     }
   }

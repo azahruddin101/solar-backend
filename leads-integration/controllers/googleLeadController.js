@@ -9,7 +9,7 @@ const { readScheduledAt, rescheduleUpdate, statusLogEntry } = require('../utils/
 const { applyLeadAssignments } = require('../utils/leadAssignment');
 const { resolveWebhookKey, resolveWebhookKeyFromPayload } = require('../services/googleAdsKey');
 const { leadCompanyFilter } = require('../utils/tenant');
-const { assignedScope } = require('../utils/leadScope');
+const { assignedWriteScope, withAssignedScope } = require('../utils/leadScope');
 const { convertedStatusIds, pageConvertedLast } = require('../utils/convertedLast');
 const { assertLeadStatusMutable, assertLeadsAssignmentMutable } = require('../utils/leadStatusLock');
 const { applyLeadSearch } = require('../utils/leadSearch');
@@ -197,7 +197,7 @@ const listGoogleLeads = async (req, res) => {
       }
       if (Object.keys(filter.createdAt).length === 0) delete filter.createdAt;
     }
-    Object.assign(filter, assignedScope(req)); // staff who may only see their own leads
+    withAssignedScope(filter, req); // staff who may only see their own leads
 
     // converted ("registered") leads go last
     const convertedIds = await convertedStatusIds(req.leadsCompanyId);
@@ -250,7 +250,7 @@ const assignGoogleLeads = async (req, res) => {
 
     const leads = await GoogleLead.find({
       ...leadCompanyFilter(req.leadsCompanyId),
-      ...assignedScope(req),
+      ...assignedWriteScope(req),
       _id: { $in: leadIds },
       isDeleted: false,
     }).select('_id assignedTo assignedAt assignmentHistory convertedClient status').populate('assignedTo', 'name email').lean();
@@ -296,7 +296,7 @@ const updateGoogleLeadStatus = async (req, res) => {
 
     const existing = await GoogleLead.findOne({
       ...leadCompanyFilter(req.leadsCompanyId),
-      ...assignedScope(req),
+      ...assignedWriteScope(req),
       _id: id,
       isDeleted: false,
     }).select('convertedClient status scheduledAt rescheduledCount').lean();
@@ -307,7 +307,7 @@ const updateGoogleLeadStatus = async (req, res) => {
     const now = new Date();
     const move = rescheduleUpdate(existing, scheduledAt, { statusName: status.name, byName: req.user.name || req.user.email || '', at: now });
     const lead = await GoogleLead.findOneAndUpdate(
-      { ...leadCompanyFilter(req.leadsCompanyId), ...assignedScope(req), _id: id, isDeleted: false },
+      { ...leadCompanyFilter(req.leadsCompanyId), ...assignedWriteScope(req), _id: id, isDeleted: false },
       {
         $set: { status: status._id, statusName: status.name, statusColor: status.color, statusUpdatedAt: now, scheduledAt, ...move.set },
         $push: {

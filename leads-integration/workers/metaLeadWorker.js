@@ -107,7 +107,8 @@ const processLead = async (lead) => {
   }
 
   await MetaLead.updateOne(
-    { _id: lead._id },
+    // the company in the filter keeps the write tenant-scoped, and tells the sheet hook whose sheet to refresh
+    { _id: lead._id, company: lead.company },
     {
       $set: {
         ...normalizeMetaLead(raw),

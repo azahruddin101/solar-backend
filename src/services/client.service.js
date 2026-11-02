@@ -10,6 +10,7 @@ import { pick } from '../utils/pick.js';
 import { email as validEmail, objectId } from '../utils/validators.js';
 import { deleteProjectsOf } from './project.service.js';
 import { revokeUserSessions } from './session.service.js';
+import { resolveClientScopeFilter } from './dataScope.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
 import { dateRangeOnField, escapeRe } from '../utils/listFilters.js';
 
@@ -115,9 +116,11 @@ async function clientsWithLogin(company, clientId = null) {
 }
 
 /** Paginated list; optional `q`, `from`/`to` (`YYYY-MM-DD`) filter by created date and search fields. */
-export async function listClients(company, { page, limit, q, from, to } = {}) {
+export async function listClients(company, user, { page, limit, q, from, to } = {}) {
   const { page: p, limit: l, skip } = parsePagination({ page, limit });
   const match = clientListMatch(company, { q, from, to });
+  const teamScope = user ? await resolveClientScopeFilter(user, company._id) : null;
+  if (teamScope) Object.assign(match, teamScope);
   const [facet] = await Client.aggregate([
     { $match: match },
     { $sort: { createdAt: -1 } },
@@ -154,19 +157,10 @@ function appendClientLog(client, user, action, message = '') {
 }
 
 export async function createClient(company, user, body) {
-  const { effectiveLimitsForCompany } = await import('./subscription.service.js');
-  const max = (await effectiveLimitsForCompany(company)).maxClients;
-  const limitMessage = `Your plan allows up to ${max} clients. Upgrade your plan or contact the platform administrator.`;
-  if (!(max >= 1) || (await Client.countDocuments({ company: company._id })) >= max) throw forbidden(limitMessage);
   const name = String(body?.name ?? '').trim();
   const client = new Client({ ...sanitizeClientInput(body), email: validEmail(body?.email, { required: false }), company: company._id, logs: [] });
   appendClientLog(client, user, 'client_created', name);
   await client.save();
-  // two requests can pass the check above at the same time; re-count after saving and undo this one if the limit was passed
-  if ((await Client.countDocuments({ company: company._id })) > max) {
-    await client.deleteOne();
-    throw forbidden(limitMessage);
-  }
   const result = { ...client.toJSON(), designs: 0, hasLogin: false };
   // every client with an email gets a sign-in so they can follow their proposals (view only)
   if (body?.createLogin !== false && client.email) {

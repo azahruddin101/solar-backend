@@ -104,7 +104,8 @@ export const uploadImage = withStorage(
     if (!ASSET_KINDS.includes(req.params.kind)) return cb(badRequest('Unknown asset'));
     imageFilter(req, file, cb);
   }).single('file'),
-  (req, file) => `${req.company.id}-${req.params.kind}-${rand(6)}.${IMAGE_TYPES[file.mimetype]}`,
+  // branding belongs to the organization (shared by its branches): named after it, so deleting one branch keeps it
+  (req, file) => `${(req.organization || req.company).id}-${req.params.kind}-${rand(6)}.${IMAGE_TYPES[file.mimetype]}`,
 );
 
 /** Client documents (bills, ID proofs, …): PNG, JPG, WebP or PDF, up to 30 MB. */

@@ -35,7 +35,7 @@ const { logMetaEvent, logMetaError } = require('../utils/metaLogger');
 const { narrowRange } = require('../utils/sessionScope');
 const { readPriorityFilter, priorityCondition } = require('../utils/leadPriority');
 const { integrationQuery, leadCompanyFilter, companyObjectId, runWithLeadCompany } = require('../utils/tenant');
-const { assignedScope } = require('../utils/leadScope');
+const { withAssignedScope } = require('../utils/leadScope');
 const { convertedStatusIds, pageConvertedLast } = require('../utils/convertedLast');
 const { applyLeadSearch } = require('../utils/leadSearch');
 
@@ -623,7 +623,7 @@ const getMetaLeads = async (req, res) => {
   const leadCreatedRange = narrowRange(req, fromDate, toDate);
   if (leadCreatedRange) filter.leadCreatedAt = leadCreatedRange;
   // staff who may only see their own leads: whatever the filter asked for
-  Object.assign(filter, assignedScope(req));
+  withAssignedScope(filter, req);
 
   try {
     // one box: answers, form / Page name, assignee, status or a date

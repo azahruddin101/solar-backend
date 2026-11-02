@@ -8,6 +8,7 @@ const { integrationQuery, runWithLeadCompany } = require('../utils/tenant');
 const { getFormLeadsPage, MetaGraphError } = require('../utils/metaGraph');
 const { normalizeMetaLead } = require('../utils/metaLeadNormalizer');
 const { logMetaEvent, logMetaError } = require('../utils/metaLogger');
+const { scheduleSheetSync } = require('../services/leadSheetHooks');
 
 // Historical sync worker ("Sync Previous Leads").
 // A sync job lists the connected lead forms. For each form the worker reads GET /{form-id}/leads
@@ -195,17 +196,21 @@ const storeLeads = async (job, form, leads) => {
     counts.duplicates += existing.length - completed;
   }
 
+  // bulkWrite runs no Mongoose hooks: refresh the company's Google Sheet explicitly when leads came in
+  if (counts.imported > 0) scheduleSheetSync(job.company);
   return counts;
 };
 
 // Fetch one page, retrying transient Meta errors a few times before giving up for now
-const fetchLeadsPage = async (form, pageToken, pageSize) => {
+// `since`: only leads submitted after it (scheduled syncs); null reads every lead Meta still keeps
+const fetchLeadsPage = async (form, pageToken, pageSize, since) => {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await getFormLeadsPage(form.formId, pageToken, {
         after: form.cursor,
         limit: pageSize.value,
         basicFields: form.basicFields,
+        since,
       });
     } catch (error) {
       if (!(error instanceof MetaGraphError)) throw error;
@@ -240,7 +245,7 @@ const syncForm = async (job, form, pageToken) => {
   for (let pageNumber = 0; pageNumber < MAX_PAGES_PER_FORM; pageNumber += 1) {
     let page;
     try {
-      page = await fetchLeadsPage(form, pageToken, pageSize);
+      page = await fetchLeadsPage(form, pageToken, pageSize, job.since || null);
     } catch (error) {
       if (!(error instanceof MetaGraphError)) throw error;
 

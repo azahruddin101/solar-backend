@@ -95,8 +95,6 @@ export async function assignPlanAsAdmin(company, planId, { limits } = {}) {
   const plan = await getPlan(planId);
   company.planRef = plan._id;
   if (plan.kind === 'custom' && limits) {
-    if (limits.maxClients !== undefined) company.limits.maxClients = Math.max(1, Math.floor(Number(limits.maxClients)) || 1);
-    if (limits.maxDesigns !== undefined) company.limits.maxDesigns = Math.max(1, Math.floor(Number(limits.maxDesigns)) || 1);
     if (limits.maxConcurrentLogins !== undefined) company.limits.maxConcurrentLogins = Math.max(1, Math.floor(Number(limits.maxConcurrentLogins)) || 1);
   } else {
     applyPlanLimitsToCompany(company, plan);

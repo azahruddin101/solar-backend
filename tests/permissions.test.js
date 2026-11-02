@@ -58,7 +58,7 @@ test('role templates only use real permissions', () => {
 });
 
 test('hasPermission: owner has everything, staff only their effective permissions, others nothing', () => {
-  const owner = { role: 'company' };
+  const owner = { role: 'branch' };
   const staff = { role: 'agent', permissions: ['finances:view'], effectivePermissions: ['finances:view', 'finances:create_bill'] };
   const client = { role: 'client', permissions: ['finances:view'] };
   assert.equal(hasPermission(owner, 'finances', 'create_eway_bill'), true);
@@ -91,7 +91,7 @@ test('upgrading from version 4: the receipt actions are gone (a bill is the paym
 });
 
 test('leads: View all brings the own-leads View along; Telecaller can change status but not assign or export', () => {
-  assert.deepEqual(normalizePermissions(['leads:view_all']), ['leads:view', 'leads:view_all']);
+  assert.deepEqual(normalizePermissions(['leads:view_all']), ['leads:view', 'leads:view_all', 'leads:view_team']);
   const telecaller = ROLE_TEMPLATES.find((t) => t.key === 'telecaller').permissions;
   assert.ok(telecaller.includes('leads:change_status'));
   assert.ok(!telecaller.some((p) => ['leads:assign', 'leads:export', 'leads:view_all'].includes(p)));

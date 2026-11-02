@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { CLIENT_PROJECT_TYPES, CLIENT_ROOF_TYPES, DESIGN_GRID_TYPES, OPEN_DESIGN_STATUS } from '../constants/index.js';
-import { Bill, Client, Design, DesignVersion, EwayBill, Invoice, Payment } from '../models/index.js';
+import { Bill, Client, Design, DesignVersion, EwayBill, Invoice, Payment, Project } from '../models/index.js';
 import { badRequest, forbidden, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
@@ -49,25 +49,16 @@ async function ownClient(company, id) {
   return client;
 }
 
-async function checkLimit(company) {
-  const { effectiveLimitsForCompany } = await import('./subscription.service.js');
-  const max = (await effectiveLimitsForCompany(company)).maxDesigns;
-  const message = `Your plan allows up to ${max} designs. Upgrade your plan or contact the platform administrator.`;
-  if (!(max >= 1) || (await Design.countDocuments({ company: company._id })) >= max) throw forbidden(message);
-  /** Call after inserting: two requests can pass the check above together, so re-count and undo the new design if the limit was passed. */
-  return async (design) => {
-    if ((await Design.countDocuments({ company: company._id })) > max) {
-      await design.deleteOne();
-      throw forbidden(message);
-    }
-  };
-}
-
 /** Lists leave out the heavy `data`. Optional `from`/`to` (`YYYY-MM-DD`) filter on `createdAt`; `show` is a dashboard preset (listPresets.js). */
-export async function listDesigns(company, { client, page, limit, from, to, show } = {}) {
+export async function listDesigns(company, { client, page, limit, from, to, show, installable = false } = {}) {
   const match = { company: company._id };
   if (client) match.client = new mongoose.Types.ObjectId(objectId(client, 'Client'));
   Object.assign(match, dateRangeOnField('createdAt', from, to) || {}, (await designShowMatch(company, show)) || {});
+  // ?installable=1 : booked proposals that have no installation yet (the "Start installation" picker)
+  if (installable) {
+    match.status = 'won';
+    match._id = { $nin: await Project.distinct('design', { company: company._id }) };
+  }
   const { page: p, limit: l, skip } = parsePagination({ page, limit });
   const [facet] = await Design.aggregate([
     { $match: match },
@@ -86,7 +77,14 @@ export async function listDesigns(company, { client, page, limit, from, to, show
     {
       $facet: {
         meta: [{ $count: 'total' }],
-        rows: [{ $skip: skip }, { $limit: l }],
+        rows: [
+          { $skip: skip },
+          { $limit: l },
+          // each proposal says whether it has an installation (one per proposal), so no page needs every installation
+          { $lookup: { from: 'projects', localField: '_id', foreignField: 'design', as: '_installation', pipeline: [{ $project: { _id: 1 } }] } },
+          { $addFields: { installationId: { $toString: { $arrayElemAt: ['$_installation._id', 0] } } } },
+          { $project: { _installation: 0 } },
+        ],
       },
     },
   ]);
@@ -182,7 +180,6 @@ function parseValidUntil(v) {
 }
 
 export async function createDesign(company, user, body) {
-  const afterInsert = await checkLimit(company);
   const client = await ownClient(company, body?.client);
   const isQuick = body?.type === 'quick';
   const initialData = isQuick
@@ -212,7 +209,6 @@ export async function createDesign(company, user, body) {
     ...cleanBillingExtras(body),
     logs: [],
   });
-  await afterInsert(design);
   appendLog(design, user, 'design_created', name);
   await design.save();
   if (design.loanRequired) await openLoanForDesign(company, design, user);
@@ -328,14 +324,37 @@ export async function sendDesignForClientReview(company, user, id, { message } =
 }
 
 export async function duplicateDesign(company, user, id) {
-  const afterInsert = await checkLimit(company);
   const src = await getDesign(company, id);
   const copyName = `${src.name} (copy)`.slice(0, 120);
-  const copy = await Design.create({ company: src.company, client: src.client._id, name: copyName, data: src.data, summary: src.summary, validUntil: null, shareToken: newShareToken(), logs: [] });
-  await afterInsert(copy);
+  // a new draft with everything that describes the quote; not the original's status, client response, review invite,
+  // AMC bookings or share link
+  const plain = src.toObject ? src.toObject() : src;
+  const copy = await Design.create({
+    company: src.company,
+    client: src.client._id,
+    name: copyName,
+    type: plain.type || '3d',
+    data: plain.data,
+    summary: plain.summary,
+    billingName: plain.billingName,
+    loanRequired: Boolean(plain.loanRequired),
+    gridType: plain.gridType,
+    projectType: plain.projectType,
+    roofType: plain.roofType,
+    cleaningFrequency: plain.cleaningFrequency,
+    cleaningCharge: plain.cleaningCharge,
+    subsidy: plain.subsidy,
+    amcOptionalSelections: [...(plain.amcOptionalSelections || [])],
+    validUntil: null,
+    shareToken: newShareToken(),
+    logs: [],
+  });
   appendLog(copy, user, 'design_created', copyName);
   appendLog(copy, user, 'design_duplicated', `Copied from “${src.name}”`);
   await copy.save();
+  // the same follow-up files as a new proposal with these settings
+  if (copy.loanRequired) await openLoanForDesign(company, copy, user);
+  if (copy.subsidy?.enabled) await openSubsidyForDesign(company, copy, user);
   return copy.populate('client', 'name email');
 }
 

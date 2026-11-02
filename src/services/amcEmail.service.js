@@ -46,7 +46,7 @@ const unique = (list) => [...new Map(list.filter((r) => isEmail(r.email)).map((r
 
 /** The company's owners and its own contact address (e.g. info@…), which hears about every AMC event. */
 async function companyPeople(company) {
-  const owners = await User.find({ company: company._id, role: ROLES.COMPANY, active: true }).select('_id name email').lean();
+  const owners = await User.find({ company: company._id, role: ROLES.BRANCH, active: true }).select('_id name email').lean();
   return unique([...owners.map((u) => ({ id: String(u._id), name: u.name, email: u.email })), { id: null, name: company.name, email: company.email }]);
 }
 

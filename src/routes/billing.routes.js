@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { permissionOnly, requireRole } from '../middlewares/auth.middleware.js';
+import { organizationOnly, permissionOnly, requireRole } from '../middlewares/auth.middleware.js';
 import { ROLES } from '../constants/index.js';
 import { uploadBillPdf, uploadCreditNotePdf, uploadEwayBillPdf, uploadInvoicePdf } from '../middlewares/upload.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
@@ -17,7 +17,7 @@ const ewayBill = permissionOnly('finances', 'create_eway_bill');
 const bill = permissionOnly('finances', 'create_bill');
 
 // voiding is the company owner's alone: it removes a payment and reopens goods, so it is not a staff permission
-const ownerOnly = requireRole(ROLES.COMPANY);
+const ownerOnly = requireRole(ROLES.BRANCH, ROLES.COMPANY);
 
 const dates = (req) => ({ from: req.query.from, to: req.query.to });
 

@@ -12,6 +12,7 @@ import clientRoutes from './client.routes.js';
 import loanRoutes from './loan.routes.js';
 import subsidyRoutes from './subsidy.routes.js';
 import expenseRoutes from './expense.routes.js';
+import organizationRoutes from './organization.routes.js';
 import companyRoutes from './company.routes.js';
 import designRoutes from './design.routes.js';
 import { myProjectRoutes, projectRoutes } from './project.routes.js';
@@ -40,6 +41,7 @@ router.use('/admin', superAdminOnly, adminRoutes);
 // (view/create/update/delete) a route needs; these mounts are just the outer "may they even try" gate —
 // anyone with at least one action granted in the area(s) listed gets through to it.
 // (routes/company.routes.js is owner-only as a whole: company settings, masters and lead integrations)
+router.use('/organization', organizationRoutes);
 router.use('/company', authenticate, companyRoutes);
 router.use('/clients', withAreaAccess('clients'), clientRoutes);
 router.use('/expenses', withAreaAccess('expenses'), expenseRoutes); // what was spent on each proposal's project

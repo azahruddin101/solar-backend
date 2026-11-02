@@ -56,21 +56,40 @@ test('finance actions are separate permissions', () => {
 });
 
 test('masters, staff and roles are owner-only', () => {
-  for (const [method, path] of [['PUT', '/api/projects/steps'], ['PUT', '/api/company/catalog-settings'], ['PUT', '/api/company'], ['POST', '/api/agents'], ['PUT', '/api/agents/:id'], ['POST', '/api/roles'], ['PUT', '/api/roles/:id'], ['DELETE', '/api/roles/:id']]) {
+  const master = (method, path) => {
     const r = all.find((x) => x.method === method && x.path === path);
     assert.ok(r, `${method} ${path} not found`);
-    assert.ok(r.chain.some((fn) => fn.authorizes === 'role:company'), `${method} ${path} is not owner-only`);
+    // the company admin, or the owner of a company without branches (constants/tenant.js managesMasters)
+    assert.ok(r.chain.some((fn) => fn.authorizes === 'masters'), `${method} ${path} is not limited to whoever manages the masters`);
+  };
+  master('PUT', '/api/projects/steps');
+  master('PUT', '/api/projects/amc-templates');
+  master('PUT', '/api/loans/steps');
+  master('PUT', '/api/subsidies/steps');
+  master('PUT', '/api/expenses/reasons');
+  master('PUT', '/api/organization/catalog-settings');
+  master('PUT', '/api/organization');
+  // branches and the combined dashboard stay with the company admin
+  for (const [method, path] of [['GET', '/api/organization/overview'], ['GET', '/api/organization/branches'], ['POST', '/api/organization/branches'], ['PATCH', '/api/organization/branches/:id']]) {
+    const r = all.find((x) => x.method === method && x.path === path);
+    assert.ok(r, `${method} ${path} not found`);
+    assert.ok(r.chain.some((fn) => fn.authorizes === 'role:company'), `${method} ${path} is not org-admin-only`);
+  }
+  for (const [method, path] of [['POST', '/api/agents'], ['PUT', '/api/agents/:id'], ['POST', '/api/roles'], ['PUT', '/api/roles/:id'], ['DELETE', '/api/roles/:id']]) {
+    const r = all.find((x) => x.method === method && x.path === path);
+    assert.ok(r, `${method} ${path} not found`);
+    assert.ok(r.chain.some((fn) => fn.authorizes === 'role:branch|company'), `${method} ${path} is not branch-owner-only`);
   }
 });
 
 test('leads: each action has its own permission, and the old owner-only copies are gone', () => {
   const gate = (method, path) => all.find((r) => r.method === method && r.path === path)?.chain.map((fn) => fn.authorizes).filter(Boolean) || [];
-  assert.ok(gate('GET', '/api/leads/meta').includes('permission:leads:view|view_all'));
+  assert.ok(gate('GET', '/api/leads/meta').includes('permission:leads:view|view_all|view_team'));
   assert.ok(gate('PUT', '/api/leads/meta/:id/status').includes('permission:leads:change_status'));
   assert.ok(gate('POST', '/api/leads/meta/assign').includes('permission:leads:assign'));
   assert.ok(gate('PUT', '/api/leads/google/:id/priority').includes('permission:leads:update'));
   assert.ok(gate('GET', '/api/leads/export').includes('permission:leads:export'));
-  assert.ok(gate('GET', '/api/leads/reports/telecallers').includes('role:company'));
+  assert.ok(gate('GET', '/api/leads/reports/telecallers').includes('role:branch|company'));
   for (const [method, path] of [['GET', '/api/company/integrations/meta/leads'], ['POST', '/api/company/integrations/meta/leads/assign'], ['GET', '/api/company/google-leads'], ['GET', '/api/company/integrations/meta/my-leads']]) {
     assert.ok(!all.some((r) => r.method === method && r.path === path), `${method} ${path} should no longer exist`);
   }
@@ -89,6 +108,6 @@ test('manual leads: adding and importing need Leads › Add & import; the lead f
   assert.ok(gate('POST', '/api/leads/manual/import').includes('permission:leads:create'));
   assert.ok(gate('PUT', '/api/leads/manual/:id').includes('permission:leads:update'));
   assert.ok(gate('PUT', '/api/leads/manual/:id/status').includes('permission:leads:change_status'));
-  assert.ok(gate('GET', '/api/leads/manual').includes('permission:leads:view|view_all'));
-  assert.ok(gate('PUT', '/api/company/lead-form').includes('role:company'));
+  assert.ok(gate('GET', '/api/leads/manual').includes('permission:leads:view|view_all|view_team'));
+  assert.ok(gate('PUT', '/api/organization/lead-form').includes('masters'));
 });

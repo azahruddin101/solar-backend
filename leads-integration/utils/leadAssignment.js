@@ -42,7 +42,10 @@ function leadAssignmentOps(Model, companyFilter, lead, assignee, actor, now = ne
 /** Apply `leadAssignmentOps` for every lead in one bulkWrite. */
 async function applyLeadAssignments(Model, companyFilter, leads, assignee, actor, now = new Date()) {
   const ops = leads.flatMap((lead) => leadAssignmentOps(Model, companyFilter, lead, assignee, actor, now));
-  if (ops.length) await Model.bulkWrite(ops, { ordered: true });
+  if (!ops.length) return;
+  await Model.bulkWrite(ops, { ordered: true });
+  // bulkWrite runs no Mongoose hooks: the sheet's "Assigned to" column needs an explicit refresh
+  require('../services/leadSheetHooks').scheduleSheetSync(companyFilter?.company);
 }
 
 /** Mongo condition for ?assignedTo=<id> that also keeps leads this person held before (their performance), when asked. */
@@ -51,6 +54,20 @@ function heldByCondition(userId, { includePast = false } = {}) {
   return { $or: [{ assignedTo: userId }, { 'assignmentHistory.assignee': userId }] };
 }
 
+/** Staff / area-manager list scope: currently assigned or ever held by those assignees. */
+function leadVisibilityFilter(scope) {
+  if (!scope) return {};
+  if (scope.$in) {
+    return {
+      $or: [
+        { assignedTo: scope },
+        { 'assignmentHistory.assignee': scope },
+      ],
+    };
+  }
+  return heldByCondition(scope, { includePast: true });
+}
+
 const ASSIGNMENT_FIELDS = 'assignmentHistory isReassigned reassignedCount isRescheduled logs';
 
-module.exports = { leadAssignmentOps, applyLeadAssignments, heldByCondition, ASSIGNMENT_FIELDS };
+module.exports = { leadAssignmentOps, applyLeadAssignments, heldByCondition, leadVisibilityFilter, ASSIGNMENT_FIELDS };

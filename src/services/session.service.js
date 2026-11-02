@@ -26,7 +26,7 @@ function deviceLabel(userAgent = '') {
  * are exempt: they neither use up nor get blocked by the owner's devices.
  */
 async function ownerSessionFilter(companyId) {
-  const owners = await User.find({ company: companyId, role: ROLES.COMPANY }).distinct('_id');
+  const owners = await User.find({ company: companyId, role: ROLES.BRANCH }).distinct('_id');
   return { company: companyId, user: { $in: owners } };
 }
 
@@ -101,6 +101,41 @@ export async function confirmWithinDeviceLimit(company, sessionId) {
   if (active > max) {
     await AuthSession.deleteOne({ sessionId });
     throw new HttpError(403, `Your plan allows ${max} device${max === 1 ? '' : 's'} signed in at once. Sign out on another device first.`, DEVICE_LIMIT_CODE, { max, active: active - 1, sessions: await listActiveCompanySessions(company._id) });
+  }
+}
+
+/** One person's own active sessions (the company admin's devices), for the device-limit dialog. */
+async function listUserSessions(userId) {
+  const rows = await AuthSession.find({ user: userId, expiresAt: { $gt: new Date() } }).sort({ lastActiveAt: -1 }).populate('user', 'name email role').limit(20);
+  return rows.map((s) => ({ sessionId: s.sessionId, userName: s.user?.name || s.user?.email || 'User', userEmail: s.user?.email || '', role: s.user?.role || '', device: deviceLabel(s.userAgent), lastActiveAt: s.lastActiveAt }));
+}
+
+/**
+ * The company admin signs in to the whole organization, not to one branch: their own devices count against the
+ * organization's sign-in total and never against a branch's (and making room only signs out their own devices -
+ * never a branch owner's).
+ */
+const adminLimit = (organization) => Math.max(1, organization?.limits?.maxConcurrentLogins || 1);
+const deviceLimitError = (max, active, sessions) => new HttpError(
+  403,
+  max === 1 ? 'Another device is already signed in. Sign out there first, then try again.' : `Your plan allows ${max} devices signed in at once. Sign out on another device first.`,
+  DEVICE_LIMIT_CODE,
+  { max, active, sessions },
+);
+
+export async function assertAdminLoginAllowed(user, organization) {
+  const max = adminLimit(organization);
+  const active = await AuthSession.countDocuments({ user: user._id, expiresAt: { $gt: new Date() } });
+  if (active >= max) throw deviceLimitError(max, active, await listUserSessions(user._id));
+}
+
+/** After registering the admin's session: two sign-ins at once can both pass the check above, so re-count. */
+export async function confirmAdminWithinLimit(user, organization, sessionId) {
+  const max = adminLimit(organization);
+  const active = await AuthSession.countDocuments({ user: user._id, expiresAt: { $gt: new Date() } });
+  if (active > max) {
+    await AuthSession.deleteOne({ sessionId });
+    throw deviceLimitError(max, active - 1, await listUserSessions(user._id));
   }
 }
 

@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { COMPANY_STATUS, DEFAULT_AGENT_ROLES, DEFAULT_EXPENSE_REASONS, DEFAULT_PRODUCT_UNITS, DEFAULT_STEP_PRIORITY, DEFAULT_SUBSIDY_STEPS, STEP_PRIORITIES } from '../constants/index.js';
 import { capFirst } from '../utils/text.js';
 import { schemaOptions, subSchemaOptions, text } from './schemaOptions.js';
+import { companyMastersPlugin } from './companyMasters.plugin.js';
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
@@ -39,6 +40,7 @@ const amcTemplateSchema = new mongoose.Schema(
 
 const companySchema = new mongoose.Schema(
   {
+    organization: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', default: null, index: true },
     name: { type: String, required: true, trim: true, maxlength: 120 },
     email: text(200),
     phone: text(40),
@@ -52,8 +54,7 @@ const companySchema = new mongoose.Schema(
     plan: { type: String, default: 'starter' }, // legacy label; use planRef
     planRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan', default: null, index: true },
     limits: {
-      maxClients: { type: Number, default: 25, min: 1 }, // set from the company's plan; nothing is unlimited
-      maxDesigns: { type: Number, default: 50, min: 1 },
+      // the only commercial caps: branches (on the Organization) and devices signed in at once (here)
       maxConcurrentLogins: { type: Number, default: 2, min: 1 },
     },
     subscription: {
@@ -136,5 +137,8 @@ const companySchema = new mongoose.Schema(
   },
   schemaOptions,
 );
+
+// shared settings always come from the branch's organization (see companyMasters.plugin.js)
+companySchema.plugin(companyMastersPlugin);
 
 export const Company = mongoose.model('Company', companySchema);

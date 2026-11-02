@@ -3,7 +3,7 @@ import { clientOverview } from '../services/clientOverview.service.js';
 
 export async function list(req, res) {
   res.json(
-    await clientService.listClients(req.company, {
+    await clientService.listClients(req.company, req.user, {
       page: req.query.page,
       limit: req.query.limit,
       q: req.query.q,

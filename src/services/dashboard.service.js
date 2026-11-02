@@ -468,7 +468,9 @@ export async function staffCounts(user, company) {
     ]))[0]?.n || 0,
   };
   if (may('leads')) {
-    const own = hasPermission(user, 'leads', 'view_all') ? {} : { assignedTo: me }; // as the lead lists scope them
+    const { resolveLeadAssigneeScope, leadAssignedFilter } = await import('./dataScope.service.js');
+    const scope = await resolveLeadAssigneeScope(user);
+    const own = scope ? leadAssignedFilter(scope) : {};
     jobs.metaLeads = () => leadModels.meta.countDocuments({ ...filter, ...own, isDeleted: false, processingStatus: 'processed' });
     jobs.googleLeads = () => leadModels.google.countDocuments({ ...filter, ...own, isDeleted: false });
     jobs.manualLeads = () => leadModels.manual.countDocuments({ ...filter, ...own, isDeleted: false });

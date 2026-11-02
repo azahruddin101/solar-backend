@@ -6,7 +6,8 @@ import path from 'node:path';
 import { env } from '../config/env.js';
 import { hasPermission } from '../middlewares/auth.middleware.js';
 import { ROLES } from '../constants/index.js';
-import { ClientTicket, Ticket } from '../models/index.js';
+import { Client, ClientTicket, Ticket } from '../models/index.js';
+import { resolveClientScopeFilter } from './dataScope.service.js';
 import { forbidden, notFound } from '../utils/HttpError.js';
 
 export const SAFE_NAME = /^[\w][\w.-]{0,200}$/;
@@ -57,7 +58,7 @@ export async function assertCanOpen(user, name) {
     const url = `/uploads/${name}`;
     const scope = user.role === ROLES.CLIENT
       ? (user.client ? { company: user.company, client: user.client } : null)
-      : [ROLES.COMPANY, ROLES.AGENT].includes(user.role) && hasPermission(user, 'helpdesk', 'view') ? { company: user.company } : null;
+      : [ROLES.BRANCH, ROLES.COMPANY, ROLES.AGENT].includes(user.role) && hasPermission(user, 'helpdesk', 'view') ? { company: user.company } : null;
     if (scope && (await ClientTicket.exists({ ...scope, 'messages.attachments.url': url }))) return;
     throw forbidden('You do not have access to this file');
   }
@@ -68,6 +69,11 @@ export async function assertCanOpen(user, name) {
   const mayView = (area) => ownCompany && hasPermission(user, area, 'view');
   if (DOC.test(name)) {
     if (mayView('clients')) return;
+    // "their team's clients": only documents of a client in their team
+    if (ownCompany && hasPermission(user, 'clients', 'view_team')) {
+      const scope = await resolveClientScopeFilter(user, user.company);
+      if (await Client.exists({ company: user.company, ...(scope || {}), 'documents.url': `/uploads/${name}` })) return;
+    }
   } else if (STEP.test(name)) {
     if (user.role !== ROLES.CLIENT && ownCompany) return; // the company's owner and its agents (never a client)
   } else if (TICKET.test(name)) {

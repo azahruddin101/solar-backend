@@ -40,7 +40,7 @@ test('a new AMC request reaches the owner and staff who may assign AMC visits', 
   const company = await Company.create({ name: 'Acme Solar' });
   const supervisor = await Role.create({ company: company._id, name: 'Supervisor', permissions: ['tasks:view', 'tasks:assign'] });
   const viewerRole = await Role.create({ company: company._id, name: 'Viewer', permissions: ['tasks:view'] });
-  const owner = await person(company, 'owner', { role: 'company' });
+  const owner = await person(company, 'owner', { role: 'branch' }); // the company's owner (role branch since organizations)
   const lead = await person(company, 'lead', { role: 'agent', staffRoles: [supervisor._id] });
   const direct = await person(company, 'direct', { role: 'agent', permissions: ['tasks:view', 'tasks:assign'] });
   const viewer = await person(company, 'viewer', { role: 'agent', staffRoles: [viewerRole._id] });

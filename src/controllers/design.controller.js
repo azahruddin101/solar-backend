@@ -10,6 +10,7 @@ export async function list(req, res) {
       from: req.query.from,
       to: req.query.to,
       show: req.query.show,
+      installable: req.query.installable === '1' || req.query.installable === 'true',
     }),
   );
 }

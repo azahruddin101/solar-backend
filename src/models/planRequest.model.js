@@ -12,8 +12,6 @@ const planRequestSchema = new mongoose.Schema(
     status: { type: String, enum: PLAN_REQUEST_STATUS, default: 'pending' },
     message: text(2000),
     requestedLimits: {
-      maxClients: { type: Number, default: 25, min: 1 },
-      maxDesigns: { type: Number, default: 50, min: 1 },
       maxConcurrentLogins: { type: Number, default: 2, min: 1 },
     },
     adminNotes: text(2000),
@@ -21,8 +19,6 @@ const planRequestSchema = new mongoose.Schema(
     planName: text(80),
     quotedPriceMonthly: { type: Number, default: 0, min: 0 },
     quotedLimits: {
-      maxClients: { type: Number, default: 25, min: 1 },
-      maxDesigns: { type: Number, default: 50, min: 1 },
       maxConcurrentLogins: { type: Number, default: 2, min: 1 },
     },
     dedicatedPlan: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan', default: null },

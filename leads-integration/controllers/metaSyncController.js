@@ -5,6 +5,7 @@ const activeKeyFor = (companyId) => `active:${companyId}`;
 const MetaSyncJob = require('../models/MetaSyncJob');
 const { kickMetaSyncWorker } = require('../workers/metaLeadWorker');
 const { logMetaEvent, logMetaError } = require('../utils/metaLogger');
+const { nextAutoSyncAt, AUTO_SYNC_SETTINGS } = require('../services/metaAutoSync');
 
 // User-safe explanations for the error codes the sync worker records
 const SYNC_ERROR_MESSAGES = {
@@ -26,6 +27,8 @@ const serializeSyncJob = (job) => {
   return {
     id: String(job._id),
     status: job.status,
+    trigger: job.trigger || 'manual',
+    since: job.since || null,
     pageName: job.pageName,
     totalForms: job.totalForms,
     formsProcessed: job.formsProcessed,
@@ -113,7 +116,12 @@ const startMetaSync = async (req, res) => {
 const getMetaSyncStatus = async (req, res) => {
   try {
     const job = await MetaSyncJob.findOne(leadCompanyFilter(req.leadsCompanyId)).sort({ createdAt: -1 });
-    res.json({ sync: serializeSyncJob(job) });
+    const everyHours = AUTO_SYNC_SETTINGS.intervalMs ? AUTO_SYNC_SETTINGS.intervalMs / (60 * 60 * 1000) : 0;
+    res.json({
+      sync: serializeSyncJob(job),
+      // the automatic sync: how often it runs, and when this company's next run is due
+      autoSync: { enabled: everyHours > 0, everyHours, nextAt: await nextAutoSyncAt(req.leadsCompanyId) },
+    });
   } catch (error) {
     logMetaError('META_INTERNAL_ERROR', { reason: error.name });
     res.status(500).json({ message: 'Server error retrieving the lead sync status' });

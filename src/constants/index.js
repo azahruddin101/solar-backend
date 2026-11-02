@@ -1,6 +1,6 @@
-export const ROLES = { SUPERADMIN: 'superadmin', COMPANY: 'company', AGENT: 'agent', CLIENT: 'client' };
-/** Roles that belong to a company (tenant). Agents are the company's field staff. */
-export const TENANT_ROLES = [ROLES.COMPANY, ROLES.AGENT, ROLES.CLIENT];
+export const ROLES = { SUPERADMIN: 'superadmin', COMPANY: 'company', BRANCH: 'branch', AGENT: 'agent', CLIENT: 'client' };
+/** Roles that belong to a tenant workspace (branch-scoped data). Org admins use sessions tied to a branch. */
+export const TENANT_ROLES = [ROLES.COMPANY, ROLES.BRANCH, ROLES.AGENT, ROLES.CLIENT];
 export const COMPANY_STATUS = ['active', 'suspended'];
 export const PLANS = ['starter', 'growth', 'enterprise'];
 export const DESIGN_STATUS = ['draft', 'proposed', 'reproposed', 'negotiation', 'won', 'lost'];

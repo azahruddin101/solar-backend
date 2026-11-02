@@ -74,14 +74,15 @@ export function summarizeLinePricing({ lines = [], gstIncluded = true, discount 
     if (gstIncluded && pct > 0) {
       const taxable = round2(lineGross / (1 + pct / 100));
       const gst = round2(lineGross - taxable);
-      return { ...l, gross: l.amount, gstPercent: catalogPct, amount: lineGross, taxable, gstAmount: gst, lineTotal: lineGross };
+      return { ...l, gross: l.amount, gstPercent: pct, amount: lineGross, taxable, gstAmount: gst, lineTotal: lineGross };
     }
     if (!gstIncluded && pct > 0) {
       const taxable = lineGross;
       const gst = round2(taxable * (pct / 100));
-      return { ...l, gross: l.amount, gstPercent: catalogPct, amount: lineGross, taxable, gstAmount: gst, lineTotal: round2(taxable + gst) };
+      return { ...l, gross: l.amount, gstPercent: pct, amount: lineGross, taxable, gstAmount: gst, lineTotal: round2(taxable + gst) };
     }
-    return { ...l, gross: l.amount, gstPercent: catalogPct, amount: lineGross, taxable: lineGross, gstAmount: 0, lineTotal: lineGross };
+    // the rate actually applied: a document made without GST shows 0 %, never the product's catalog rate
+    return { ...l, gross: l.amount, gstPercent: pct, amount: lineGross, taxable: lineGross, gstAmount: 0, lineTotal: lineGross };
   });
 
   const subtotal = round2(processed.reduce((a, l) => a + l.amount, 0));
@@ -184,6 +185,12 @@ export function splitDiscounts(lines, gstIncluded, withGst, input = {}) {
   return { gross, first, extra, total: round2(first + extra) };
 }
 
+/** Whether a bill charged GST at all. */
+export const billHasGst = (bill) => !(bill?.pricing?.withGst === false || bill?.pricing?.invoiceGstMode === 'without_gst');
+
+/** The GST rate a stored line was actually charged: its own rate on a bill with GST, 0 % on a bill made without GST. */
+export const appliedGstPercent = (line, billWithGst) => (billWithGst || n(line?.gstAmount) > 0 ? n(line?.gstPercent) : 0);
+
 /**
  * One pricing for an invoice that settles several bills: their frozen lines one after another (each tagged with its
  * bill number) and their totals added up — nothing is recomputed, so the invoice total is exactly what was paid on the
@@ -192,18 +199,19 @@ export function splitDiscounts(lines, gstIncluded, withGst, input = {}) {
  */
 export function consolidatePricing(bills) {
   if (!bills?.length) throw badRequest('There is no paid bill to invoice yet');
-  const withGst = bills.some((b) => !(b.pricing?.withGst === false || b.pricing?.invoiceGstMode === 'without_gst'));
+  const withGst = bills.some((b) => billHasGst(b));
   const sum = (key) => round2(bills.reduce((a, b) => a + n(b.pricing?.[key]), 0));
-  const lines = bills.flatMap((b) => (b.pricing?.lines || []).map((l) => ({ ...l, billId: String(b._id || b.id), billNo: b.billNo })));
+  // each line at the rate its bill actually charged (bills stored before this fix kept the catalog rate on no-GST lines)
+  const lines = bills.flatMap((b) => (b.pricing?.lines || []).map((l) => ({ ...l, gstPercent: appliedGstPercent(l, billHasGst(b)), billId: String(b._id || b.id), billNo: b.billNo })));
+  // HSN summary rebuilt from those lines, one row per HSN and rate, so every row's GST is its taxable × its rate
   const byHsn = new Map();
-  for (const b of bills) {
-    for (const r of b.pricing?.taxByHsn || []) {
-      const row = byHsn.get(r.hsn) || { hsn: r.hsn, taxable: 0, gst: 0, rates: new Set() };
-      row.taxable = round2(row.taxable + n(r.taxable));
-      row.gst = round2(row.gst + n(r.gst));
-      if (r.rate != null) row.rates.add(r.rate);
-      byHsn.set(r.hsn, row);
-    }
+  for (const l of lines) {
+    const rate = n(l.gstPercent);
+    const key = `${l.hsn || '—'}|${rate}`;
+    const row = byHsn.get(key) || { hsn: l.hsn || '—', taxable: 0, gst: 0, rates: new Set([rate]) };
+    row.taxable = round2(row.taxable + n(l.taxable));
+    row.gst = round2(row.gst + n(l.gstAmount));
+    byHsn.set(key, row);
   }
   const gstTotal = sum('gstTotal');
   const remarks = bills.map((b) => String(b.pricing?.discountRemark || '').trim()).filter(Boolean);

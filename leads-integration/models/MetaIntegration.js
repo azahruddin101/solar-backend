@@ -106,6 +106,12 @@ const metaIntegrationSchema = mongoose.Schema(
     lastLeadReceivedAt: {
       type: Date,
     },
+    // When the automatic sync last queued a sync for this company. Claimed atomically, so with several
+    // server processes only one of them queues each run (services/metaAutoSync.js).
+    autoSyncQueuedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

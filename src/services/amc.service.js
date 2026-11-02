@@ -266,6 +266,8 @@ export function syncDesignAmcRequestsToProject(design, project, company, user = 
     if (!tmpl) continue;
     const visit = visitForRequest(project, req);
     if (!visit) {
+      // a booking already carried out (its visit went with a deleted installation) is never reopened as a new visit
+      if (req.status === 'completed') continue;
       project.amcVisits.push(visitFromClientRequest(tmpl, req));
       const added = project.amcVisits[project.amcVisits.length - 1];
       amcLog(added, req.requestedBy === 'company' ? user : null, 'amc_requested', `${tmpl.name} for ${startOfDay(req.requestedDate).toDateString()}${req.note ? ` — ${req.note}` : ''}`);

@@ -1,4 +1,5 @@
 import * as companyService from '../services/company.service.js';
+import { masterWriteTarget } from '../services/tenant.service.js';
 import { createAmcVisit as createAmcVisitService, assignAmcRequest as assignAmcRequestService, assignAmcVisit as assignAmcVisitService, listAmcOverview, listAmcRequests, listAmcVisits } from '../services/amc.service.js';
 import * as projectService from '../services/project.service.js';
 import { getLifecycleForProject } from '../services/lifecycle.service.js';
@@ -10,7 +11,8 @@ export async function getSteps(req, res) {
 }
 
 export async function updateSteps(req, res) {
-  res.json(await companyService.updateInstallationSteps(req.company, req.body));
+  const doc = masterWriteTarget(req);
+  res.json(await companyService.updateInstallationSteps(doc, req.body));
 }
 
 export async function getAmcTemplates(req, res) {
@@ -18,7 +20,8 @@ export async function getAmcTemplates(req, res) {
 }
 
 export async function updateAmcTemplates(req, res) {
-  res.json(await companyService.updateAmcTemplates(req.company, req.body));
+  const doc = masterWriteTarget(req);
+  res.json(await companyService.updateAmcTemplates(doc, req.body));
 }
 
 export async function completeAmcVisit(req, res) {
@@ -79,7 +82,7 @@ export async function amcVisits(req, res) {
 }
 
 export async function stepBoard(req, res) {
-  res.json(await projectService.stepBoard(req.company));
+  res.json(await projectService.stepBoard(req.company, { user: req.user }));
 }
 
 export async function stepBoardMine(req, res) {
@@ -103,12 +106,13 @@ export async function assignAmcRequest(req, res) {
 }
 
 export async function list(req, res) {
-  res.json(await projectService.listProjects(req.company, {
+  res.json(await projectService.listProjects(req.company, req.user, {
     page: req.query.page,
     limit: req.query.limit,
     from: req.query.from,
     to: req.query.to,
     show: req.query.show,
+    q: req.query.q,
   }));
 }
 

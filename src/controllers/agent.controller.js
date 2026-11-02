@@ -1,5 +1,7 @@
 import * as agentService from '../services/agent.service.js';
 import { staffOverview } from '../services/staffOverview.service.js';
+import { canViewStaffOverview } from '../services/dataScope.service.js';
+import { forbidden } from '../utils/HttpError.js';
 
 export async function list(req, res) {
   res.json(await agentService.listAgents(req.company));
@@ -10,6 +12,7 @@ export async function analytics(req, res) {
 }
 
 export async function overview(req, res) {
+  if (!(await canViewStaffOverview(req.user, req.params.id))) throw forbidden();
   res.json(await staffOverview(req.company, req.params.id));
 }
 

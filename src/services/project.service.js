@@ -13,6 +13,7 @@ import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
 import { inTransaction } from './stock.service.js';
 import { billingService } from './billing.service.js';
+import { projectScopeFilter } from './dataScope.service.js';
 import { amcLog, ensureProjectAmc, installationCompletionDate, markAmcRequestCompleted, spawnAmcVisitsForProject, syncDesignAmcRequestsToProject } from './amc.service.js';
 
 const MAX_STEPS = 30;
@@ -58,7 +59,7 @@ function requireCoords(lat, lng) {
 
 /** Owners see the client's full contact and the design's value; agents only what they need on site. */
 function populate(query, role) {
-  const owner = role === ROLES.COMPANY;
+  const owner = role === ROLES.BRANCH || role === ROLES.COMPANY;
   return query
     .populate('design', owner ? 'name status summary' : 'name summary.address summary.kwp summary.panels')
     .populate('client', owner ? 'name email phone address' : 'name phone address')
@@ -248,14 +249,32 @@ async function getOwn(company, id) {
 }
 
 /** Lists leave out the logs. Paginated: pass `page`/`limit` (defaults to a single bounded page). */
-export async function listProjects(company, { page, limit, from, to, show } = {}) {
+export async function listProjects(company, user, { page, limit, from, to, show, q } = {}) {
   const filter = { company: company._id };
   const dateMatch = dateRangeOnField('updatedAt', from, to);
   if (dateMatch) Object.assign(filter, dateMatch);
-  Object.assign(filter, projectShowMatch(show) || {}); // a dashboard preset (listPresets.js)
+  // conditions go into $and: presets and the team scope are $or conditions, which Object.assign would overwrite
+  const and = [];
+  const preset = projectShowMatch(show);
+  if (preset) and.push(preset);
+  if (user) {
+    const teamFilter = await projectScopeFilter(user, company._id);
+    if (teamFilter) and.push(teamFilter);
+  }
+  // ?q= : the job's proposal or client name (so pickers can find any job, not just the first page)
+  const term = String(q ?? '').trim().slice(0, 80);
+  if (term) {
+    const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const [designIds, clientIds] = await Promise.all([
+      Design.distinct('_id', { company: company._id, name: re }),
+      Client.distinct('_id', { company: company._id, name: re }),
+    ]);
+    and.push({ $or: [{ design: { $in: designIds } }, { client: { $in: clientIds } }] });
+  }
+  if (and.length) filter.$and = and;
   const { page: p, limit: l, skip } = parsePagination({ page, limit });
   const [items, total] = await Promise.all([
-    populate(Project.find(filter).select('-logs').sort({ updatedAt: -1 }).skip(skip).limit(l), ROLES.COMPANY).lean(),
+    populate(Project.find(filter).select('-logs').sort({ updatedAt: -1 }).skip(skip).limit(l), ROLES.BRANCH).lean(),
     Project.countDocuments(filter),
   ]);
   return { items: toApiJSONList(items), total, page: p, limit: l };
@@ -266,12 +285,13 @@ export async function listProjects(company, { page, limit, from, to, show } = {}
  * final "Completed" column; each installation is a card in the column of the step it is on. An agent sees the
  * installations they hold a step in; `mine` on each step says whether they may move it.
  */
-export async function stepBoard(company, { agentId = null } = {}) {
+export async function stepBoard(company, { agentId = null, user = null } = {}) {
+  const teamFilter = user ? await projectScopeFilter(user, company._id) : null; // "their team's installations" only
   const DAY = 24 * 60 * 60 * 1000;
   const now = Date.now();
   const [co, projects] = await Promise.all([
     Company.findById(company._id).select('installationSteps').lean(),
-    Project.find({ company: company._id, ...(agentId ? { 'steps.assignee': agentId } : {}) })
+    Project.find({ company: company._id, ...(agentId ? { 'steps.assignee': agentId } : {}), ...(teamFilter || {}) })
       .select('design client status steps installationCompletedAt updatedAt')
       .populate('design', 'name summary.address summary.kwp')
       .populate('client', 'name phone')
@@ -330,7 +350,7 @@ export async function getProject(company, id) {
   const raw = await Project.findOne({ _id: objectId(id, 'Installation'), company: company._id });
   if (!raw) throw notFound('Installation');
   await ensureProjectAmc(raw, company);
-  const project = await populate(Project.findById(raw._id), ROLES.COMPANY);
+  const project = await populate(Project.findById(raw._id), ROLES.BRANCH);
   return project;
 }
 
@@ -338,6 +358,7 @@ export async function getProject(company, id) {
 export async function startProject(company, user, body) {
   const design = await Design.findOne({ _id: objectId(body?.design, 'Design'), company: company._id }).select('-data');
   if (!design) throw notFound('Design');
+  if (design.status !== 'won') throw badRequest('Only a booked (won) proposal can start an installation');
   if (!company.installationSteps.length) throw badRequest('Set up your installation steps first');
   if (await Project.exists({ design: design._id })) throw conflict('This design already has an installation');
 

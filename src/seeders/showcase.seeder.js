@@ -15,7 +15,7 @@ import { hashPassword } from '../utils/password.js';
 import { cleanRichText } from '../utils/richText.js';
 import { DEMO_PASSWORD } from './data/companies.js';
 import { SHOWCASE_AGENTS, SHOWCASE_CATEGORIES, SHOWCASE_CLIENTS, SHOWCASE_COMPANY, SHOWCASE_DESIGNS, SHOWCASE_INSTALLATIONS, SHOWCASE_LOGIN, SHOWCASE_PACKAGES, SHOWCASE_TICKETS } from './data/showcase.js';
-import { writeBrandImages } from './demo.seeder.js';
+import { seedOrgTenant } from './orgTenant.seeder.js';
 import { ensureDefaultPlans } from './plans.seeder.js';
 import { seedShowcaseCatalog } from './showcaseCatalog.js';
 
@@ -58,23 +58,39 @@ export async function seedShowcase({ replace = false } = {}) {
     console.log('  - existing showcase company removed');
   }
 
-  /* company + owner */
-  const company = await Company.create({ ...SHOWCASE_COMPANY, pdfTerms: cleanRichText(SHOWCASE_COMPANY.pdfTerms), installationSteps: DEFAULT_INSTALLATION_STEPS, plan: 'growth', createdAt: daysAgo(75) });
+  /* organization + main branch + branch owner */
+  const tenant = await seedOrgTenant({
+    login: SHOWCASE_LOGIN,
+    company: SHOWCASE_COMPANY,
+    password: DEMO_PASSWORD,
+    branchName: `${SHOWCASE_COMPANY.name} — Main`,
+    maxBranches: 2,
+  });
+  const company = tenant.branch;
+  const org = tenant.org;
+  org.pdfTerms = cleanRichText(SHOWCASE_COMPANY.pdfTerms);
+  org.installationSteps = DEFAULT_INSTALLATION_STEPS;
   const plan = await Plan.findOne({ code: 'pro' });
   if (plan) {
-    company.planRef = plan._id;
-    applyPlanLimitsToCompany(company, plan);
-    company.subscription = { periodStart: daysAgo(12), periodEnd: daysAgo(-18) };
+    org.planRef = plan._id;
+    applyPlanLimitsToCompany(org, plan);
+    org.subscription = { periodStart: daysAgo(12), periodEnd: daysAgo(-18) };
   }
+  await org.save();
+  company.createdAt = daysAgo(75);
   await company.save();
-  const passwordHash = await hashPassword(DEMO_PASSWORD);
-  const owner = await User.create({ email: SHOWCASE_LOGIN.email, name: SHOWCASE_LOGIN.name, phone: SHOWCASE_COMPANY.phone, passwordHash, role: ROLES.COMPANY, company: company._id, lastLoginAt: daysAgo(0, -2) });
+  const owner = await User.findOne({ email: SHOWCASE_LOGIN.email });
+  owner.phone = SHOWCASE_COMPANY.phone;
+  owner.lastLoginAt = daysAgo(0, -2);
+  await owner.save();
+  const { writeBrandImages } = await import('./demo.seeder.js');
   await writeBrandImages(company);
+  const ownerRole = ROLES.BRANCH;
 
   /* team */
   const agents = new Map();
   for (const a of SHOWCASE_AGENTS) {
-    const agent = await User.create({ ...a, passwordHash, role: ROLES.AGENT, company: company._id, active: true, lastLoginAt: daysAgo(1) });
+    const agent = await User.create({ ...a, passwordHash: await hashPassword(DEMO_PASSWORD), role: ROLES.AGENT, company: company._id, organization: company.organization, active: true, lastLoginAt: daysAgo(1) });
     agents.set(a.email.split('@')[0], agent);
   }
 
@@ -108,7 +124,7 @@ export async function seedShowcase({ replace = false } = {}) {
     designs.set(d.name, await Design.create({
       company: company._id, client: client._id, name: d.name, status: d.status, data: d.data || null,
       summary: { ...(d.summary || {}), address: d.data?.place.address || '' },
-      logs: [{ action: 'design_created', by: owner._id, byName: owner.name, byRole: ROLES.COMPANY, message: d.name, at: daysAgo(6 + i * 3) }],
+      logs: [{ action: 'design_created', by: owner._id, byName: owner.name, byRole: ownerRole, message: d.name, at: daysAgo(6 + i * 3) }],
       createdAt: daysAgo(6 + i * 3), updatedAt: updated,
     }));
   }
@@ -117,7 +133,7 @@ export async function seedShowcase({ replace = false } = {}) {
   for (const inst of SHOWCASE_INSTALLATIONS) {
     const design = designs.get(inst.design);
     const origin = design.data?.origin || { lat: 18.52, lng: 73.85 };
-    const logs = [{ action: 'started', by: owner._id, byName: owner.name, byRole: ROLES.COMPANY, at: daysAgo(inst.startedDaysAgo) }];
+    const logs = [{ action: 'started', by: owner._id, byName: owner.name, byRole: ownerRole, at: daysAgo(inst.startedDaysAgo) }];
     const steps = DEFAULT_INSTALLATION_STEPS.map((tpl, i) => {
       const [status, who, when, note] = inst.steps[i];
       const agent = agents.get(who);
@@ -127,7 +143,7 @@ export async function seedShowcase({ replace = false } = {}) {
     });
     for (const s of steps) {
       const base = { step: s._id, stepName: s.name };
-      logs.push({ ...base, action: 'step_assigned', by: owner._id, byName: owner.name, byRole: ROLES.COMPANY, message: `${s._agent.name} · auto-assigned`, at: daysAgo(inst.startedDaysAgo) });
+      logs.push({ ...base, action: 'step_assigned', by: owner._id, byName: owner.name, byRole: ownerRole, message: `${s._agent.name} · auto-assigned`, at: daysAgo(inst.startedDaysAgo) });
       if (s.status !== 'pending') logs.push({ ...base, action: 'step_started', by: s._agent._id, byName: s._agent.name, byRole: ROLES.AGENT, message: '', at: s.startedAt });
       if (s.status === 'done') {
         const jitter = () => (Math.random() - 0.5) * 0.0004;
@@ -137,7 +153,7 @@ export async function seedShowcase({ replace = false } = {}) {
       }
     }
     const complete = steps.every((s) => s.status === 'done');
-    if (complete) logs.push({ action: 'completed', by: owner._id, byName: owner.name, byRole: ROLES.COMPANY, at: steps.at(-1).completedAt });
+    if (complete) logs.push({ action: 'completed', by: owner._id, byName: owner.name, byRole: ownerRole, at: steps.at(-1).completedAt });
     logs.sort((a, b) => a.at - b.at);
     await Project.create({
       company: company._id, design: design._id, client: design.client,
@@ -145,8 +161,8 @@ export async function seedShowcase({ replace = false } = {}) {
       steps: steps.map(({ _agent, _note, _when, ...s }) => s),
       logs, createdAt: daysAgo(inst.startedDaysAgo), updatedAt: logs.at(-1).at,
     });
-    design.logs.push({ action: 'installation_started', by: owner._id, byName: owner.name, byRole: ROLES.COMPANY, message: `${steps.length} steps from company template`, at: daysAgo(inst.startedDaysAgo) });
-    if (complete) design.logs.push({ action: 'installation_completed', by: owner._id, byName: owner.name, byRole: ROLES.COMPANY, message: 'All installation steps finished', at: steps.at(-1).completedAt });
+    design.logs.push({ action: 'installation_started', by: owner._id, byName: owner.name, byRole: ownerRole, message: `${steps.length} steps from company template`, at: daysAgo(inst.startedDaysAgo) });
+    if (complete) design.logs.push({ action: 'installation_completed', by: owner._id, byName: owner.name, byRole: ownerRole, message: 'All installation steps finished', at: steps.at(-1).completedAt });
     await design.save();
   }
 
@@ -179,7 +195,7 @@ export async function seedShowcase({ replace = false } = {}) {
         return { author: user._id, authorName: user.name || user.email, authorRole: user.role, body, createdAt: daysAgo(ago) };
       });
       const logs = [
-        { action: 'created', by: owner._id, byName: owner.name, byRole: ROLES.COMPANY, message: t.subject, at: messages[0].createdAt },
+        { action: 'created', by: owner._id, byName: owner.name, byRole: ownerRole, message: t.subject, at: messages[0].createdAt },
         ...messages.slice(1).map((m) => ({ action: 'message', by: m.author, byName: m.authorName, byRole: m.authorRole, message: 'Sent a message', at: m.createdAt })),
         ...(t.status !== 'open' ? [{ action: 'status_changed', by: admin._id, byName: admin.name || admin.email, byRole: ROLES.SUPERADMIN, message: `Open → ${t.status === 'resolved' ? 'Resolved' : t.status}`, at: messages.at(-1).createdAt }] : []),
       ];

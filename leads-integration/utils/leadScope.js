@@ -1,6 +1,30 @@
-// Which leads the signed-in user may work on. The main app's /api/leads router sets `req.leadsAssignedTo` to the
-// staff member's id unless they may view every lead (the owner, or "Leads › View all"); every lead query and update
-// in the controllers then adds this condition, so a telecaller only ever sees and changes the leads assigned to them.
-const assignedScope = (req) => (req.leadsAssignedTo ? { assignedTo: req.leadsAssignedTo } : {});
+// Which leads the signed-in user may work on. Set by scopeToOwnLeads on the leads router.
+const { leadVisibilityFilter } = require('./leadAssignment');
 
-module.exports = { assignedScope };
+/** Leads the user may SEE: assigned to them (or their team) now, or held by them before (their own history). */
+const assignedScope = (req) => {
+  if (req.leadsAssignedScope) return leadVisibilityFilter(req.leadsAssignedScope);
+  if (req.leadsAssignedTo) return leadVisibilityFilter(req.leadsAssignedTo);
+  return {};
+};
+
+/**
+ * Leads the user may CHANGE (status, priority, details, assignment, conversion): only those assigned to them (or their
+ * team) right now. A lead handed to someone else stays visible to its previous holder, read-only.
+ */
+const assignedWriteScope = (req) => {
+  const scope = req.leadsAssignedScope || req.leadsAssignedTo;
+  return scope ? { assignedTo: scope } : {};
+};
+
+/**
+ * Adds the user's lead scope to a list filter with $and: the scope is itself an $or / assignedTo condition, so merging
+ * it with Object.assign would silently replace the filter's own (e.g. "include past assignments").
+ */
+const withAssignedScope = (filter, req) => {
+  const scope = assignedScope(req);
+  if (Object.keys(scope).length) filter.$and = [...(filter.$and || []), scope];
+  return filter;
+};
+
+module.exports = { assignedScope, assignedWriteScope, withAssignedScope };

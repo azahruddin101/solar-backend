@@ -26,7 +26,7 @@ export async function updateCompany(req, res) {
 }
 
 export async function resetPassword(req, res) {
-  await companyService.resetCompanyPassword(req.params.id, req.body?.password);
+  await companyService.resetCompanyPassword(req.params.id, req.body?.password, req.body?.who === 'admin' ? 'admin' : 'owner');
   res.json({ ok: true });
 }
 

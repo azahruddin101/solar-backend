@@ -10,7 +10,10 @@ const userSchema = new mongoose.Schema(
     role: { type: String, enum: Object.values(ROLES), required: true },
     name: text(120),
     company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+    organization: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', default: null, index: true },
     client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', default: null, index: true }, // for role 'client': the client record this login belongs to
+    /** Direct manager (area manager) — same branch, role agent only. */
+    manager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     // agents (field staff) — managed by their company
     phone: text(40),
     jobTitle: text(80), // legacy single role; prefer `roles`

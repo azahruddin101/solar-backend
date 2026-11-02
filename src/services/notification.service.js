@@ -42,7 +42,7 @@ export function notifyStepStatusChange(change) {
 
 async function sendStepStatusChange({ projectId, companyId, designId, stepId, stepName, assigneeId, actorId, from, to, eventId }) {
   const [owners, design] = await Promise.all([
-    User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean(),
+    User.find({ company: companyId, role: ROLES.BRANCH, active: true }).select('_id').lean(),
     Design.findById(designId).select('name').lean(),
   ]);
   const notActor = (id) => String(id) !== actorId;
@@ -129,7 +129,7 @@ export function notifyTicketUpdate(update) {
 }
 
 async function sendTicketUpdate({ ticketId, companyId, ref, subject, title, body, eventId }) {
-  const owners = await User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean();
+  const owners = await User.find({ company: companyId, role: ROLES.BRANCH, active: true }).select('_id').lean();
   const audiences = [{ userIds: owners.map((u) => String(u._id)), path: `/dashboard/support/${ticketId}` }];
   const message = { title, body: `${ref} · ${subject}: ${body}`.slice(0, 300), data: { event: 'ticket_update', ticketId } };
   await record(audiences, { ...message, company: companyId, type: 'ticket_update', eventKey: `ticket:${eventId}` });
@@ -149,7 +149,7 @@ async function sendClientTicket({ ticketId, companyId, clientId, ref, subject, t
   let audiences;
   if (toTeam) {
     const [owners, staff, roles] = await Promise.all([
-      User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean(),
+      User.find({ company: companyId, role: ROLES.BRANCH, active: true }).select('_id').lean(),
       User.find({ company: companyId, role: ROLES.AGENT, active: true }).select('_id permissions staffRoles').lean(),
       rolesById(companyId),
     ]);
@@ -179,7 +179,7 @@ export function notifyProposalResponse(payload) {
 }
 
 async function sendProposalResponse({ companyId, designId, designName, designType, decision, note, eventId }) {
-  const owners = await User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean();
+  const owners = await User.find({ company: companyId, role: ROLES.BRANCH, active: true }).select('_id').lean();
   const ownerIds = owners.map((u) => String(u._id));
   if (!ownerIds.length) return;
   const verb = PROPOSAL_RESPONSE_LABEL[decision] || 'responded to';
@@ -217,7 +217,7 @@ async function sendClientProposalReadyForReview({ companyId, clientId, designId,
 
 /* ───────────── AMC (maintenance visits) ───────────── */
 
-const ownerIdsOf = async (companyId) => (await User.find({ company: companyId, role: ROLES.COMPANY, active: true }).select('_id').lean()).map((u) => String(u._id));
+const ownerIdsOf = async (companyId) => (await User.find({ company: companyId, role: ROLES.BRANCH, active: true }).select('_id').lean()).map((u) => String(u._id));
 /** Active staff of the company holding `permission` through their roles or own grants (resolved now, so it follows role changes). */
 async function staffIdsWith(companyId, permission) {
   const [staff, roles] = await Promise.all([

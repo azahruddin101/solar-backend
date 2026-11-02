@@ -138,28 +138,37 @@ export const catalogSettingsSchema = obj({
 }).partial();
 
 const limits = obj({
-  maxClients: f.num({ min: 1, max: 1e6, int: true, label: 'Max clients' }).optional(),
-  maxDesigns: f.num({ min: 1, max: 1e6, int: true, label: 'Max designs' }).optional(),
   maxConcurrentLogins: f.num({ min: 1, max: 1000, int: true, label: 'Concurrent logins' }).optional(),
+  maxBranches: f.num({ min: 1, max: 500, int: true, label: 'Max branches' }).optional(),
 });
 
+// A company is set up with or without branches. With branches, `loginEmail` is the company admin and the first
+// branch has its own owner, who must sign in with a different email.
 export const adminCompanyCreateSchema = obj({
   ...companyProfile,
+  hasBranches: z.boolean().optional(),
   loginEmail: f.emailRequired,
   password: f.newPassword,
   contactName: f.personNameOptional,
+  branchName: f.textOptional(120, 'Branch name'),
+  branchOwnerName: f.personNameOptional,
+  branchOwnerEmail: f.emailOptional,
+  branchOwnerPassword: f.optionalNewPassword,
   notes: f.textOptional(1000, 'Notes'),
   limits: limits.optional(),
+}).superRefine((v, ctx) => {
+  if (!v.hasBranches) return;
+  if (!v.branchOwnerEmail) ctx.addIssue({ code: 'custom', path: ['branchOwnerEmail'], message: 'Enter the branch owner’s email' });
+  else if (v.branchOwnerEmail === v.loginEmail) ctx.addIssue({ code: 'custom', path: ['branchOwnerEmail'], message: 'Use a different email from the company admin' });
+  if (!v.branchOwnerPassword) ctx.addIssue({ code: 'custom', path: ['branchOwnerPassword'], message: 'Enter a password for the branch owner' });
 });
-export const adminCompanyUpdateSchema = obj({ ...companyProfile, notes: f.textOptional(1000, 'Notes'), limits: limits.optional() }).partial();
-export const passwordResetSchema = obj({ password: f.newPassword });
+export const adminCompanyUpdateSchema = obj({ ...companyProfile, loginEmail: f.emailOptional, adminEmail: f.emailOptional, notes: f.textOptional(1000, 'Notes'), limits: limits.optional() }).partial();
+export const passwordResetSchema = obj({ password: f.newPassword, who: z.enum(['owner', 'admin']).optional() });
 
 export const planSchema = obj({
   name: f.orgNameRequired,
   description: f.textOptional(300, 'Description'),
   priceMonthly: f.num({ min: 0, max: 1e7, label: 'Monthly price' }).optional(),
-  maxClients: f.num({ min: 1, max: 1e6, int: true, label: 'Max clients' }).optional(),
-  maxDesigns: f.num({ min: 1, max: 1e6, int: true, label: 'Max designs' }).optional(),
   maxConcurrentLogins: f.num({ min: 1, max: 1000, int: true, label: 'Concurrent logins' }).optional(),
   features: z.array(z.string().trim().max(100, 'A feature can be at most 100 characters')).max(20, 'A plan can list up to 20 features').optional(),
 });
@@ -169,8 +178,8 @@ export const planUpdateSchema = planSchema.partial();
 
 const permissionList = z.array(z.enum(STAFF_PERMISSIONS, { error: 'Unknown permission' })).max(STAFF_PERMISSIONS.length);
 // `roles` are job titles (which installation steps someone can be assigned); `staffRoles` are permission roles (ids)
-export const agentCreateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.newPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), staffRoles: strArray(10, 24).optional(), permissions: permissionList.optional() });
-export const agentUpdateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.optionalNewPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), staffRoles: strArray(10, 24).optional(), permissions: permissionList.optional() }).partial();
+export const agentCreateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.newPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), staffRoles: strArray(10, 24).optional(), permissions: permissionList.optional(), manager: f.objectIdString.optional().nullable() });
+export const agentUpdateSchema = obj({ name: f.personNameRequired, email: f.emailRequired, password: f.optionalNewPassword, phone: f.phoneOptional, roles: strArray(10, 40).optional(), staffRoles: strArray(10, 24).optional(), permissions: permissionList.optional(), manager: f.objectIdString.optional().nullable() }).partial();
 
 /* ───────────── staff roles ───────────── */
 
@@ -393,8 +402,6 @@ export const portalProposalResponseSchema = obj({
 /* ───────────── plan requests ───────────── */
 
 const requestedLimits = obj({
-  maxClients: f.num({ min: 1, max: 100000, int: true, label: 'Clients' }).optional(),
-  maxDesigns: f.num({ min: 1, max: 100000, int: true, label: 'Designs' }).optional(),
   maxConcurrentLogins: f.num({ min: 1, max: 500, int: true, label: 'Concurrent sign-ins' }).optional(),
 });
 export const planRequestSchema = obj({
@@ -405,8 +412,6 @@ export const planRequestSchema = obj({
 });
 export const planRequestApproveSchema = obj({
   planName: f.textOptional(80, 'Plan name'),
-  maxClients: f.numOptional({ min: 1, max: 100000, int: true, label: 'Clients' }),
-  maxDesigns: f.numOptional({ min: 1, max: 100000, int: true, label: 'Designs' }),
   maxConcurrentLogins: f.numOptional({ min: 1, max: 500, int: true, label: 'Concurrent sign-ins' }),
   priceMonthly: f.numOptional({ min: 0, max: 1e7, label: 'Monthly price' }),
   periodDays: f.numOptional({ min: 1, max: 366, int: true, label: 'Period (days)' }),

@@ -87,10 +87,12 @@ test('required fields say so when missing', () => {
 });
 
 test('plan limits must be at least 1 (no unlimited)', () => {
-  const plan = { name: 'Team', priceMonthly: 10, maxClients: 20, maxDesigns: 40, maxConcurrentLogins: 2 };
+  const plan = { name: 'Team', priceMonthly: 10, maxConcurrentLogins: 2 };
   ok(S.planSchema, plan);
-  for (const k of ['maxClients', 'maxDesigns', 'maxConcurrentLogins']) bad(S.planSchema, { ...plan, [k]: 0 }, k);
-  bad(S.adminCompanyCreateSchema, { name: 'Acme', loginEmail: 'a@acme.co', password: 'Goodpass123', limits: { maxClients: 0 } }, 'limits.maxClients');
-  bad(S.planRequestSchema, { type: 'custom', message: 'x', requestedLimits: { maxDesigns: 0 } }, 'requestedLimits.maxDesigns');
-  bad(S.planRequestApproveSchema, { maxClients: 0 }, 'maxClients');
+  bad(S.planSchema, { ...plan, maxConcurrentLogins: 0 }, 'maxConcurrentLogins');
+  bad(S.adminCompanyCreateSchema, { name: 'Acme', loginEmail: 'a@acme.co', password: 'Goodpass123', limits: { maxBranches: 0 } }, 'limits.maxBranches');
+  bad(S.planRequestSchema, { type: 'custom', message: 'x', requestedLimits: { maxConcurrentLogins: 0 } }, 'requestedLimits.maxConcurrentLogins');
+  bad(S.planRequestApproveSchema, { maxConcurrentLogins: 0 }, 'maxConcurrentLogins');
+  // clients and proposals are not limited any more: old clients sending these fields are simply ignored
+  ok(S.planSchema, { ...plan, maxClients: 0, maxDesigns: 0 });
 });

@@ -103,6 +103,16 @@ async function parseStaffRoles(company, raw) {
   return ids;
 }
 
+async function parseManager(company, agentId, raw) {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  const id = objectId(raw, 'Manager');
+  if (agentId && String(id) === String(agentId)) throw badRequest('A person cannot report to themselves');
+  const mgr = await User.findOne({ _id: id, company: company._id, role: ROLES.AGENT, active: true });
+  if (!mgr) throw badRequest('Choose a manager from this branch’s staff');
+  return mgr._id;
+}
+
 export async function getAgent(company, id) {
   const agent = await User.findOne({ _id: objectId(id, 'Agent'), company: company._id, role: ROLES.AGENT });
   if (!agent) throw notFound('Agent');
@@ -127,16 +137,19 @@ export async function createAgent(company, body) {
   const roles = parseAgentRoles(company, body?.roles ?? []) ?? [];
   const permissions = parsePermissions(body?.permissions ?? []) ?? [];
   const staffRoles = (await parseStaffRoles(company, body?.staffRoles ?? [])) ?? [];
+  const manager = body?.manager !== undefined ? await parseManager(company, null, body.manager) : null;
   const agent = await User.create({
     ...pick(body, FIELDS),
     roles,
     staffRoles,
     permissions,
+    manager: manager ?? null,
     jobTitle: '',
     email,
     passwordHash: await hashPassword(plain),
     role: ROLES.AGENT,
     company: company._id,
+    organization: company.organization || undefined,
   });
   return agentPayload(agent, NO_STATS, await rolesById(company._id));
 }
@@ -153,6 +166,7 @@ export async function updateAgent(company, id, body) {
   }
   if (body?.permissions !== undefined) agent.permissions = parsePermissions(body.permissions) ?? [];
   if (body?.staffRoles !== undefined) agent.staffRoles = (await parseStaffRoles(company, body.staffRoles)) ?? [];
+  if (body?.manager !== undefined) agent.manager = await parseManager(company, agent._id, body.manager);
   if (body?.email !== undefined) {
     const email = validEmail(body.email);
     if (email !== agent.email && (await User.exists({ email }))) throw conflict('That email is already in use');

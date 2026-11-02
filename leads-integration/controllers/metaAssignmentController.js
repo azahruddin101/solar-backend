@@ -15,7 +15,7 @@ const { readPriorityFilter, priorityCondition } = require('../utils/leadPriority
 const { readScheduledAt, rescheduleUpdate, statusLogEntry } = require('../utils/leadSchedule');
 const { applyLeadAssignments } = require('../utils/leadAssignment');
 const { companyObjectId, leadCompanyFilter } = require('../utils/tenant');
-const { assignedScope } = require('../utils/leadScope');
+const { assignedScope, assignedWriteScope } = require('../utils/leadScope');
 const { assertLeadStatusMutable, assertLeadsAssignmentMutable } = require('../utils/leadStatusLock');
 
 // Every query on leads, assignments, statuses and users in this file is scoped to the signed-in company.
@@ -319,7 +319,7 @@ const assignMetaLeads = async (req, res) => {
     }
 
     const leads = await MetaLead.find(
-      tenantFilter(req, { _id: { $in: leadIds }, processingStatus: 'processed', isDeleted: false, ...assignedScope(req) })
+      tenantFilter(req, { _id: { $in: leadIds }, processingStatus: 'processed', isDeleted: false, ...assignedWriteScope(req) })
     )
       .select('_id assignedTo assignedAt assignmentHistory convertedClient adminStatus')
       .populate('assignedTo', 'name email')
@@ -413,7 +413,8 @@ const getMetaLeadAssignments = async (req, res) => {
   if (!isObjectId(req.params.id)) return res.status(404).json({ message: 'Lead not found' });
 
   try {
-    if (req.leadsAssignedTo && !(await MetaLead.exists(tenantFilter(req, { _id: req.params.id, ...assignedScope(req) })))) {
+    // own-leads and team-scoped staff alike: only the history of a lead they can see
+    if ((req.leadsAssignedTo || req.leadsAssignedScope) && !(await MetaLead.exists(tenantFilter(req, { _id: req.params.id, ...assignedScope(req) })))) {
       return res.status(404).json({ message: 'Lead not found' });
     }
     const assignments = await MetaLeadAssignment.find(tenantFilter(req, { lead: req.params.id }))
@@ -950,7 +951,7 @@ const updateMetaLeadStatus = async (req, res) => {
     const { scheduledAt, error: dateError } = readScheduledAt(body, status);
     if (dateError) return res.status(400).json({ message: dateError });
 
-    const metaLead = await MetaLead.findOne(tenantFilter(req, { _id: req.params.id, isDeleted: { $ne: true }, ...assignedScope(req) }))
+    const metaLead = await MetaLead.findOne(tenantFilter(req, { _id: req.params.id, isDeleted: { $ne: true }, ...assignedWriteScope(req) }))
       .select('convertedClient adminStatus scheduledAt rescheduledCount')
       .lean();
     if (!metaLead) return res.status(404).json({ message: 'Lead not found' });

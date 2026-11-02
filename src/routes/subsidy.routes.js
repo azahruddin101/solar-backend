@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ROLES } from '../constants/index.js';
-import { permissionOnly, requireRole } from '../middlewares/auth.middleware.js';
+import { permissionOnly, mastersOnly } from '../middlewares/auth.middleware.js';
 import { uploadSubsidyDocument } from '../middlewares/upload.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import * as subsidies from '../services/subsidy.service.js';
@@ -13,7 +13,7 @@ const update = permissionOnly('subsidies', 'update');
 
 router.get('/steps', view, wrap((req) => req.company.subsidySteps || []));
 // the subsidy step template is a company master: only the owner changes it
-router.put('/steps', requireRole(ROLES.COMPANY), validate(S.subsidyStepsSchema), wrap((req) => subsidies.updateSubsidySteps(req.company, req.body)));
+router.put('/steps', mastersOnly, validate(S.subsidyStepsSchema), wrap((req) => subsidies.updateSubsidySteps(req.organization || req.company, req.body)));
 router.get('/', view, wrap((req) => subsidies.listSubsidies(req.company, { q: req.query.q, status: req.query.status })));
 router.get('/proposal/:designId', view, wrap((req) => subsidies.getSubsidyOfDesign(req.company, req.params.designId))); // null when the proposal has no subsidy
 router.get('/:id', view, wrap((req) => subsidies.getSubsidy(req.company, req.params.id)));

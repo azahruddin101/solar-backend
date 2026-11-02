@@ -54,7 +54,7 @@ async function createPlanRequest(company, body) {
       type: 'preset',
       plan: plan._id,
       message,
-      requestedLimits: { maxClients: plan.maxClients, maxDesigns: plan.maxDesigns, maxConcurrentLogins: plan.maxConcurrentLogins },
+      requestedLimits: { maxConcurrentLogins: plan.maxConcurrentLogins },
     });
     return requestView(row, company.name, plan);
   }
@@ -66,8 +66,6 @@ async function createPlanRequest(company, body) {
     type: 'custom',
     message,
     requestedLimits: {
-      maxClients: cleanLimit(limits.maxClients, 25, 'Clients'),
-      maxDesigns: cleanLimit(limits.maxDesigns, 50, 'Designs'),
       maxConcurrentLogins: cleanLimit(limits.maxConcurrentLogins, 2, 'Concurrent sign-ins'),
     },
   });
@@ -123,12 +121,10 @@ export async function approvePlanRequest(id, body, admin) {
     applyPlanLimitsToCompany(company, plan);
     row.planName = plan.name;
     row.quotedPriceMonthly = plan.priceMonthly;
-    row.quotedLimits = { maxClients: plan.maxClients, maxDesigns: plan.maxDesigns, maxConcurrentLogins: plan.maxConcurrentLogins };
+    row.quotedLimits = { maxConcurrentLogins: plan.maxConcurrentLogins };
   } else {
     const planName = String(body?.planName ?? '').trim() || `${company.name} Custom`;
     const limits = {
-      maxClients: cleanLimit(body?.maxClients, row.requestedLimits.maxClients, 'Clients'),
-      maxDesigns: cleanLimit(body?.maxDesigns, row.requestedLimits.maxDesigns, 'Designs'),
       maxConcurrentLogins: cleanLimit(body?.maxConcurrentLogins, row.requestedLimits.maxConcurrentLogins, 'Concurrent sign-ins'),
     };
     const priced = calculatePlanPrice(limits); // also range-checks the limits
@@ -146,8 +142,6 @@ export async function approvePlanRequest(id, body, admin) {
       forCompany: company._id,
     });
     company.planRef = plan._id;
-    company.limits.maxClients = plan.maxClients;
-    company.limits.maxDesigns = plan.maxDesigns;
     company.limits.maxConcurrentLogins = plan.maxConcurrentLogins;
     row.dedicatedPlan = plan._id;
     row.planName = planName;

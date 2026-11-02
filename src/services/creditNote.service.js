@@ -10,6 +10,7 @@ import { parsePagination, toApiJSON } from '../utils/lean.js';
 import { dateRangeOnField } from '../utils/listFilters.js';
 import { objectId } from '../utils/validators.js';
 import { archivePdfOnce } from './archivePdf.service.js';
+import { appliedGstPercent, billHasGst } from './invoicePricing.service.js';
 import { nextDocumentNumber, partyFilter } from './ewayBill.service.js';
 import { inTransaction, returnStock } from './stock.service.js';
 
@@ -68,7 +69,7 @@ export async function returnableOf(company, id) {
 }
 
 /** One returned line, priced from the bill's line: its whole remaining amount when it is the last of it, else pro rata. */
-function creditLine({ line, index, taken }, qty, serials) {
+function creditLine({ line, index, taken }, qty, serials, billWithGst = true) {
   const total = n(line.qty);
   const last = Math.abs(total - n(taken?.qty) - qty) < EPS;
   const out = {
@@ -80,7 +81,7 @@ function creditLine({ line, index, taken }, qty, serials) {
     unit: line.unit || '',
     qty,
     rate: line.rate,
-    gstPercent: line.gstPercent,
+    gstPercent: appliedGstPercent(line, billWithGst), // never a catalog rate a no-GST bill didn't charge
     productId: line.productId,
     batch: line.batch || '',
     batchNo: line.batchNo || '',
@@ -200,7 +201,7 @@ export const creditNoteService = {
           if (!(qty > 0)) throw badRequest(`Enter how many ${g.line.name} came back`);
           if (qty - g.qtyLeft > EPS) throw badRequest(`Only ${g.qtyLeft} ${g.line.unit || ''} of ${g.line.name} can still be returned`.replace('  ', ' '));
         }
-        lines.push(creditLine(g, qty, serials));
+        lines.push(creditLine(g, qty, serials, billHasGst(bill)));
       }
 
       // the units must still be sold on those e-way bills: one that was installed or returned by hand can't be put back by this

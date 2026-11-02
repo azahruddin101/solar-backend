@@ -19,7 +19,8 @@ import { deleteFile } from './storage.service.js';
 
 const MAX_MESSAGES = 1000;
 const isClient = (user) => user.role === ROLES.CLIENT;
-const isTeam = (user) => user.role === ROLES.COMPANY || user.role === ROLES.AGENT;
+// the company side: the branch owner, the company admin working in a branch, and staff
+const isTeam = (user) => [ROLES.BRANCH, ROLES.COMPANY, ROLES.AGENT].includes(user.role);
 
 /** The company side: the owner, or staff holding this exact Client support action. */
 function assertTeam(user, action) {

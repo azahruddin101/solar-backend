@@ -1,4 +1,5 @@
 const GoogleLead = require('../models/GoogleLead');
+const { leadCompanyFilter } = require('../utils/tenant');
 const { resolveWebhookKey, generateWebhookKey, removeWebhookKey } = require('../services/googleAdsKey');
 const { parseGoogleAdsLeadFile } = require('../utils/googleAdsImport');
 
@@ -14,7 +15,8 @@ const serverError = (res, error, message) => {
 };
 
 const loadStatus = async (companyId) => {
-  const tenant = { company: companyId };
+  // an ObjectId, not the id string: aggregate() does not cast like find() does, so a string matches nothing
+  const tenant = leadCompanyFilter(companyId);
   const [keyInfo, totals, forms, lastLead, lastTest] = await Promise.all([
     resolveWebhookKey(companyId),
     GoogleLead.aggregate([

@@ -13,5 +13,6 @@ router.get('/me', authenticate, auth.me);
 router.put('/me', authenticate, validate(S.profileSchema), auth.updateMe);
 router.post('/password', authenticate, validate(S.passwordChangeSchema), auth.changePassword);
 router.post('/logout', authenticate, auth.logout);
+router.post('/branch', authenticate, auth.switchBranch);
 
 export default router;

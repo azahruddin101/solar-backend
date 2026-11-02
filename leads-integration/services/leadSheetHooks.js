@@ -21,18 +21,24 @@ const companyOf = (result, query) => {
   return company && (typeof company === 'string' || company._bsontype || company.toHexString) ? String(company) : null;
 };
 
-const schedule = (result, query) => {
-  if (process.env.NODE_ENV === 'test') return;
-  if (!hasChanges(result)) return;
-  const companyId = companyOf(result, query);
-  if (!companyId) return;
+/**
+ * Queue a re-export of this company's Google Sheet (debounced in googleSheetSync). Called by the hooks below, and
+ * directly by writes that run no Mongoose hooks (bulkWrite: Meta sync imports, lead assignment).
+ */
+const scheduleSheetSync = (companyId) => {
+  if (process.env.NODE_ENV === 'test' || !companyId) return;
   setImmediate(() => {
     try {
-      require('./googleSheetSync').scheduleLeadSheetSync(companyId);
+      require('./googleSheetSync').scheduleLeadSheetSync(String(companyId));
     } catch (error) {
       console.error('[SHEETS] Could not schedule lead sync:', error.message);
     }
   });
+};
+
+const schedule = (result, query) => {
+  if (!hasChanges(result)) return;
+  scheduleSheetSync(companyOf(result, query));
 };
 
 // Lead fields the sheet is built from (see utils/leadRows.js): the details, status and assignee. Changes to
@@ -87,4 +93,4 @@ const attachLeadSheetHooks = (schema, fields = SHEET_FIELDS) => {
   schema.post('replaceOne', scheduleAlways);
 };
 
-module.exports = { attachLeadSheetHooks, updateTouchesSheet, SHEET_FIELDS, ASSIGNMENT_FIELDS };
+module.exports = { attachLeadSheetHooks, updateTouchesSheet, scheduleSheetSync, SHEET_FIELDS, ASSIGNMENT_FIELDS };

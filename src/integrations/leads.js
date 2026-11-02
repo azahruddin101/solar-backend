@@ -61,6 +61,8 @@ export const leadCompanyModels = [
 
 export function startLeadIntegrationWorkers() {
   require(path.join(root, 'workers/metaLeadWorker.js')).startMetaLeadWorker();
+  // every META_AUTO_SYNC_HOURS (default 3): sync each connected company's Meta lead forms as a safety net to the webhook
+  require(path.join(root, 'services/metaAutoSync.js')).startMetaAutoSync();
   // bring each connected company's Google Sheet up to date
   require(path.join(root, 'services/googleSheetSync.js')).scheduleAllSheets()
     .catch((e) => console.error('[leads] Could not schedule Google Sheet sync:', e.message));

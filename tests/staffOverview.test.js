@@ -47,7 +47,8 @@ test('their steps, leads, expenses and activity — nobody else’s', async () =
     design: design._id,
     client: client._id,
     steps: [
-      { name: 'Survey', assignee: ravi._id, status: 'done', startedAt: daysAgo(3), completedAt: daysAgo(2) },
+      // finished a minute ago (always this month, whatever today's date), after 24 hours of work
+      { name: 'Survey', assignee: ravi._id, status: 'done', startedAt: new Date(Date.now() - 60e3 - 24 * 3600e3), completedAt: new Date(Date.now() - 60e3) },
       { name: 'Wiring', assignee: ravi._id, status: 'in_progress', priority: 'urgent', startedAt: daysAgo(9) },
       { name: 'Mounting', assignee: ravi._id, status: 'pending', priority: 'low' },
       { name: 'Paperwork', assignee: other._id, status: 'pending' },

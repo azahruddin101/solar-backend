@@ -13,7 +13,7 @@ export const OWNER_VISIBLE = [
 ];
 
 /** Fields that exist on the model but belong to the platform administrator (or are internal). */
-export const ADMIN_ONLY = ['notes', 'plan', 'planRef', 'parentCategoriesSeeded'];
+export const ADMIN_ONLY = ['notes', 'plan', 'planRef', 'parentCategoriesSeeded', 'organization'];
 
 const pickOwnerFields = (json) => Object.fromEntries(OWNER_VISIBLE.filter((k) => json[k] !== undefined).map((k) => [k, json[k]]));
 

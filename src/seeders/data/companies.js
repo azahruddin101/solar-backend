@@ -17,7 +17,15 @@ export const DEMO_PASSWORD = demoPassword();
 
 export const COMPANIES = [
   {
+    // a company with branches: `login` is the company admin; each branch has its own owner
+    hasBranches: true,
     login: { email: 'demo@sunrisesolar.in', name: 'Anita Sharma' },
+    branchName: 'Sunrise Solar — Pune HQ',
+    branchOwner: { email: 'branch.pune@sunrisesolar.in', name: 'Branch Manager Pune' },
+    maxBranches: 3,
+    extraBranches: [
+      { name: 'Sunrise Solar — Bengaluru', email: 'bengaluru@sunrisesolar.in', ownerEmail: 'branch.bengaluru@sunrisesolar.in', ownerName: 'Branch Manager BLR' },
+    ],
     company: {
       name: 'Sunrise Solar Pvt Ltd',
       email: 'hello@sunrisesolar.in',
@@ -129,6 +137,8 @@ export const COMPANIES = [
   },
   {
     login: { email: 'demo@greenvolt.in', name: 'Karthik Rao' },
+    branchName: 'GreenVolt — Bengaluru',
+    maxBranches: 2,
     company: {
       name: 'GreenVolt Energy',
       email: 'sales@greenvolt.in',
@@ -137,7 +147,6 @@ export const COMPANIES = [
       website: 'www.greenvolt.in',
       taxId: '29AAGCG5678K1Z2',
       plan: 'starter',
-      limits: { maxClients: 25, maxDesigns: 50 },
       features: { pdfBranding: true, excelImport: true },
       theme: { primary: '#047857', accent: '#facc15' },
       signatoryName: 'Karthik Rao',
@@ -202,6 +211,8 @@ export const COMPANIES = [
   {
     // shows how a suspended tenant looks in the admin console (its sign-in is blocked)
     login: { email: 'demo@heliosrooftops.in', name: 'Farhan Qureshi' },
+    branchName: 'Helios — Mumbai',
+    maxBranches: 1,
     company: {
       name: 'Helios Rooftops',
       email: 'info@heliosrooftops.in',

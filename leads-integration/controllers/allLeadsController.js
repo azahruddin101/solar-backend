@@ -6,7 +6,7 @@ const ManualLead = require('../models/ManualLead');
 const MetaLeadAssignment = require('../models/MetaLeadAssignment');
 const MetaLeadStatus = require('../models/MetaLeadStatus');
 const { leadCompanyFilter } = require('../utils/tenant');
-const { assignedScope } = require('../utils/leadScope');
+const { withAssignedScope } = require('../utils/leadScope');
 const { applyLeadSearch } = require('../utils/leadSearch');
 const { readPriorityFilter, priorityCondition } = require('../utils/leadPriority');
 const { scheduleCondition } = require('../utils/leadSchedule');
@@ -106,7 +106,7 @@ async function loadMetaChunk(req, limit, statusId) {
     end.setHours(23, 59, 59, 999);
     filter.leadCreatedAt = { ...(filter.leadCreatedAt || {}), $lte: end };
   }
-  Object.assign(filter, assignedScope(req));
+  withAssignedScope(filter, req);
   if (statusId) await applyMetaStatusFilter(filter, req, statusId, tenant);
 
   const [total, leads] = await Promise.all([
@@ -156,7 +156,7 @@ async function loadGoogleChunk(req, limit, statusId) {
     end.setHours(23, 59, 59, 999);
     filter.createdAt = { ...(filter.createdAt || {}), $lte: end };
   }
-  Object.assign(filter, assignedScope(req));
+  withAssignedScope(filter, req);
 
   const [total, leads] = await Promise.all([
     GoogleLead.countDocuments(filter),
@@ -196,7 +196,7 @@ async function loadManualChunk(req, limit, statusId, manualSource) {
   const to = text(req.query.to || req.query.toDate);
   if (from && !Number.isNaN(Date.parse(from))) filter.createdAt = { ...(filter.createdAt || {}), $gte: new Date(from) };
   if (to && !Number.isNaN(Date.parse(to))) filter.createdAt = { ...(filter.createdAt || {}), $lte: new Date(to) };
-  Object.assign(filter, assignedScope(req));
+  withAssignedScope(filter, req);
 
   const [total, leads] = await Promise.all([
     ManualLead.countDocuments(filter),
@@ -261,7 +261,8 @@ const listLeadBoard = async (req, res) => {
       wanted.meta ? loadMetaChunk(req, BOARD_CAP, '') : { total: 0, items: [] },
       wanted.google ? loadGoogleChunk(req, BOARD_CAP, '') : { total: 0, items: [] },
       wanted.manual ? loadManualChunk(req, BOARD_CAP, '', wanted.manualSource) : { total: 0, items: [] },
-      MetaLeadStatus.find({ ...leadCompanyFilter(req.leadsCompanyId), isDeleted: false }).sort({ order: 1, createdAt: 1 }).lean(),
+      // deleted statuses too: leads may still sit in one, and must not vanish from the board
+      MetaLeadStatus.find({ ...leadCompanyFilter(req.leadsCompanyId) }).sort({ order: 1, createdAt: 1 }).lean(),
     ]);
     const byStatus = new Map();
     for (const lead of [meta, google, manual].flatMap((p) => p.items)) {
@@ -282,9 +283,15 @@ const listLeadBoard = async (req, res) => {
     });
     const columns = [
       column('none', { name: 'Not started', color: 'slate', outcome: 'open' }, byStatus.get('none') || []),
-      // switched-off statuses stay only while a lead still sits in them
-      ...statuses.filter((st) => st.isActive !== false || byStatus.has(String(st._id))).map((st) => column(String(st._id), st, byStatus.get(String(st._id)) || [])),
+      // switched-off and deleted statuses stay only while a lead still sits in them (nothing can be dropped there)
+      ...statuses
+        .filter((st) => (st.isActive !== false && !st.isDeleted) || byStatus.has(String(st._id)))
+        .map((st) => column(String(st._id), st.isDeleted ? { ...st, name: `${st.name} (deleted)`, isActive: false } : st, byStatus.get(String(st._id)) || [])),
     ];
+    // a status id that no longer exists at all: keep those leads visible too
+    const shown = new Set(columns.map((c) => c.id));
+    const orphans = [...byStatus.keys()].filter((key) => !shown.has(key)).flatMap((key) => byStatus.get(key));
+    if (orphans.length) columns.push(column('missing', { name: 'Status removed', color: 'slate', outcome: 'open', isActive: false }, orphans));
     const parts = [meta, google, manual];
     res.json({
       columns,

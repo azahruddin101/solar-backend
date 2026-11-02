@@ -242,9 +242,13 @@ const getLead = async (leadId, pageToken) => {
 // Read one page of the leads already submitted to a lead form (GET /{form-id}/leads).
 // The edge is cursor-paginated: pass the returned nextCursor back as `after` until it is null.
 // Meta only returns leads submitted in the last 90 days.
-const getFormLeadsPage = async (formId, pageToken, { after, limit = 100, basicFields = false } = {}) => {
+// `since` (a Date): only leads submitted after it - Meta filters on time_created (Unix seconds)
+const getFormLeadsPage = async (formId, pageToken, { after, limit = 100, basicFields = false, since = null } = {}) => {
+  const filtering = since
+    ? JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: Math.floor(new Date(since).getTime() / 1000) }])
+    : undefined;
   const body = await graphRequest('GET', `${formId}/leads`, {
-    params: { fields: basicFields ? LEAD_FIELDS_BASIC : LEAD_FIELDS_FULL, limit, after },
+    params: { fields: basicFields ? LEAD_FIELDS_BASIC : LEAD_FIELDS_FULL, limit, after, filtering },
     accessToken: pageToken,
   });
 

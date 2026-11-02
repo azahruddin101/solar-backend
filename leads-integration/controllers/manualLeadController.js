@@ -7,7 +7,7 @@ const { readPriorityFilter, priorityCondition } = require('../utils/leadPriority
 const { readScheduledAt, scheduleCondition, rescheduleUpdate, statusLogEntry } = require('../utils/leadSchedule');
 const { applyLeadAssignments, heldByCondition } = require('../utils/leadAssignment');
 const { leadCompanyFilter, companyObjectId } = require('../utils/tenant');
-const { assignedScope } = require('../utils/leadScope');
+const { assignedWriteScope, withAssignedScope } = require('../utils/leadScope');
 const { FIXED_KEYS, FIELD_TYPE_LABEL, formOf, cleanLeadValues, valueText } = require('../utils/leadForm');
 const { convertedStatusIds, pageConvertedLast } = require('../utils/convertedLast');
 const { assertLeadStatusMutable, assertLeadsAssignmentMutable } = require('../utils/leadStatusLock');
@@ -26,7 +26,17 @@ const MAX_REMARK_LENGTH = 1000;
 
 const isObjectId = (value) => typeof value === 'string' && mongoose.isValidObjectId(value);
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
-const scope = (req, extra = {}) => ({ ...leadCompanyFilter(req.leadsCompanyId), ...assignedScope(req), ...extra });
+/**
+ * Leads added or imported by someone limited to their own (or their team's) leads are assigned to them, so they keep
+ * seeing and working them. (A team scope is a list of people, so the person themself is the assignee.)
+ */
+const ownLeadAssignment = (req, now) => {
+  const assignee = req.leadsAssignedTo || (req.leadsAssignedScope ? req.user._id : null);
+  return assignee ? { assignedTo: assignee, assignedAt: now } : {};
+};
+
+// every use is a change (edit, status, assign): only leads assigned to the user (or their team) right now
+const scope = (req, extra = {}) => ({ ...leadCompanyFilter(req.leadsCompanyId), ...assignedWriteScope(req), ...extra });
 const phoneKeyOf = (phone) => String(phone || '').replace(/\D/g, '').slice(-10);
 const fail = (res, error, message) => {
   console.error('[MANUAL_LEADS]', message, error && error.message);
@@ -106,7 +116,7 @@ const listManualLeads = async (req, res) => {
       if (from && !Number.isNaN(Date.parse(from))) filter.createdAt.$gte = new Date(from);
       if (to && !Number.isNaN(Date.parse(to))) filter.createdAt.$lte = new Date(to);
     }
-    Object.assign(filter, assignedScope(req)); // staff who may only see their own leads
+    withAssignedScope(filter, req); // staff who may only see their own leads
 
     // converted ("registered") leads go last
     const convertedIds = await convertedStatusIds(req.leadsCompanyId);
@@ -142,8 +152,8 @@ const createManualLead = async (req, res) => {
       searchText: searchTextOf(form, values),
       createdBy: req.user._id,
       createdByName: req.user.name || req.user.email || '',
-      // someone who may only see their own leads keeps what they add
-      ...(req.leadsAssignedTo ? { assignedTo: req.leadsAssignedTo, assignedAt: now } : {}),
+      // someone who may only see their own (or their team's) leads keeps what they add
+      ...ownLeadAssignment(req, now),
     });
     await lead.populate('assignedTo', 'name');
     res.status(201).json(serialize(lead.toObject()));
@@ -314,7 +324,7 @@ const importManualLeads = async (req, res) => {
         searchText: searchTextOf(form, values),
         createdBy: req.user._id,
         createdByName: req.user.name || req.user.email || '',
-        ...(req.leadsAssignedTo ? { assignedTo: req.leadsAssignedTo, assignedAt: now } : {}),
+        ...ownLeadAssignment(req, now),
       });
       return undefined;
     });

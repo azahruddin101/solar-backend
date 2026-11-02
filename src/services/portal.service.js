@@ -1,6 +1,7 @@
 // What a signed-in client may see: their own proposals (never drafts), the price breakdown, their bills and invoices.
 // Clients may respond to proposals that are in “proposed” status (accept / reject / request changes).
 import { Bill, Client, Design, Invoice, Payment, Project } from '../models/index.js';
+import { OPEN_DESIGN_STATUS } from '../constants/index.js';
 import { toApiJSONList } from '../utils/lean.js';
 import {
   amcKind,

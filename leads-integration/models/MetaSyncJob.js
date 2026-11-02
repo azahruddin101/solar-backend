@@ -58,6 +58,17 @@ const metaSyncJobSchema = mongoose.Schema(
       default: '',
     },
     forms: [syncFormSchema],
+    // 'manual': "Sync Previous Leads" pressed by someone; 'scheduled': the automatic sync (services/metaAutoSync.js)
+    trigger: {
+      type: String,
+      enum: ['manual', 'scheduled'],
+      default: 'manual',
+    },
+    // Only leads submitted after this moment are read (null = every lead Meta still keeps, i.e. the last 90 days)
+    since: {
+      type: Date,
+      default: null,
+    },
 
     totalForms: { type: Number, default: 0 },
     formsProcessed: { type: Number, default: 0 },
@@ -89,6 +100,7 @@ const metaSyncJobSchema = mongoose.Schema(
 metaSyncJobSchema.index({ activeKey: 1 }, { unique: true, sparse: true });
 metaSyncJobSchema.index({ status: 1, nextAttemptAt: 1 });
 metaSyncJobSchema.index({ createdAt: -1 });
+metaSyncJobSchema.index({ company: 1, createdAt: -1 });
 
 const MetaSyncJob = mongoose.model('MetaSyncJob', metaSyncJobSchema);
 

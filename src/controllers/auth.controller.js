@@ -1,7 +1,17 @@
 import * as authService from '../services/auth.service.js';
 import { forbidden } from '../utils/HttpError.js';
 
-const session = async (req) => ({ user: await authService.userView(req.user), company: await authService.companyView(req.user, req.company || null), impersonated: Boolean(req.impersonatedBy) });
+const session = async (req) => ({
+  user: await authService.userView(req.user),
+  company: await authService.companyView(req.user, req.company || null),
+  organization: req.organization ? await authService.organizationView(req.user, req.organization) : null,
+  impersonated: Boolean(req.impersonatedBy),
+});
+
+export async function switchBranch(req, res) {
+  const out = await authService.switchBranch(req.user, req.body?.branchId, req.sessionId);
+  res.json(out);
+}
 
 export async function login(req, res) {
   res.json(await authService.login({

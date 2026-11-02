@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as projects from '../controllers/project.controller.js';
-import { permissionOnly, requireRole } from '../middlewares/auth.middleware.js';
+import { mastersOnly, permissionOnly, requireRole } from '../middlewares/auth.middleware.js';
+import { assertProjectVisible } from '../services/dataScope.service.js';
 import { ROLES } from '../constants/index.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import * as S from '../validation/schemas.js';
@@ -8,7 +9,10 @@ import { uploadInvoicePdf, uploadStepPhoto } from '../middlewares/upload.middlew
 
 /** Company owner: step template + every installation. */
 export const projectRoutes = Router();
-const view = permissionOnly('tasks', 'view');
+// "View all" is every installation; "Their team's installations" only those a team member works on. Company-wide
+// AMC boards stay with "View all" (they list every site).
+const view = permissionOnly('tasks', 'view', 'view_team');
+const viewAll = permissionOnly('tasks', 'view');
 const create = permissionOnly('tasks', 'create');
 const update = permissionOnly('tasks', 'update');
 const del = permissionOnly('tasks', 'delete');
@@ -18,15 +22,25 @@ const anyStepChange = permissionOnly('tasks', 'update', 'assign', 'change_status
 // parts replaced on an AMC visit are taken from stock and invoiced to the client (the PDF is built by the browser and archived here)
 const invoiceParts = permissionOnly('tasks', 'invoice_parts');
 
+// every route that names an installation checks it is one this person may see (team scope), before anything else runs
+projectRoutes.param('id', async (req, res, next, id) => {
+  try {
+    await assertProjectVisible(req.user, req.company._id, id);
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
 projectRoutes.get('/steps', view, projects.getSteps);
 // the installation step template is a company master: only the owner changes it
-projectRoutes.put('/steps', requireRole(ROLES.COMPANY), projects.updateSteps);
+projectRoutes.put('/steps', mastersOnly, projects.updateSteps);
 projectRoutes.get('/amc-templates', view, projects.getAmcTemplates);
-projectRoutes.put('/amc-templates', requireRole(ROLES.COMPANY), validate(S.amcTemplatesSchema), projects.updateAmcTemplates);
-projectRoutes.get('/amc-overview', view, projects.amcOverview);
-projectRoutes.get('/amc-visits', view, projects.amcVisits);
+projectRoutes.put('/amc-templates', mastersOnly, validate(S.amcTemplatesSchema), projects.updateAmcTemplates);
+projectRoutes.get('/amc-overview', viewAll, projects.amcOverview);
+projectRoutes.get('/amc-visits', viewAll, projects.amcVisits);
 projectRoutes.get('/board', view, projects.stepBoard); // the Kanban: every open installation's steps by status
-projectRoutes.get('/amc-requests', view, projects.amcRequests);
+projectRoutes.get('/amc-requests', viewAll, projects.amcRequests);
 projectRoutes.put('/amc-requests/:designId/:requestId/assign', permissionOnly('tasks', 'assign'), validate(S.amcRequestAssignSchema), projects.assignAmcRequest);
 // who installation steps can be assigned to (the owner's staff list is owner-only; this is just names and job roles)
 projectRoutes.get('/assignees', permissionOnly('tasks', 'assign'), projects.assignees);

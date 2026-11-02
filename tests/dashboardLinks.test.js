@@ -62,6 +62,8 @@ test('proposal presets list exactly what the dashboard counts', async () => {
   assert.equal((await listDesigns(company, { show: 'nonsense' })).total, 7);
 });
 
+const OWNER = { role: 'branch' }; // the owner sees every installation (listProjects scopes by the signed-in user)
+
 test('installation presets: jobs with a stuck task, and jobs with a task nobody is on', async () => {
   const agent = await User.create({ email: 'a@x.test', passwordHash: 'x', role: 'agent', name: 'A', company: company._id });
   const [a, b, c] = await Promise.all(['A', 'B', 'C'].map((name) => design({ name, status: 'won' })));
@@ -70,12 +72,12 @@ test('installation presets: jobs with a stuck task, and jobs with a task nobody 
   await Project.create({ company: company._id, design: c._id, client: client._id, status: 'completed', steps: [{ name: 'Survey', status: 'pending' }] });
 
   const t = await today(company);
-  const designsOf = async (show) => (await listProjects(company, { show })).items.map((p) => p.design?.name).sort();
+  const designsOf = async (show) => (await listProjects(company, OWNER, { show })).items.map((p) => p.design?.name).sort();
   assert.deepEqual(await designsOf('stuck'), ['A']);
   assert.equal(t.installations.stuckCount, 1);
   assert.deepEqual(await designsOf('unassigned'), ['B']); // the completed job is not "in progress"
   assert.equal(t.installations.unassignedSteps, 1);
-  assert.equal((await listProjects(company, {})).total, 3);
+  assert.equal((await listProjects(company, OWNER, {})).total, 3);
 });
 
 test('installations finished this month, and quotes made this month', async () => {
@@ -89,7 +91,7 @@ test('installations finished this month, and quotes made this month', async () =
 
   const t = await today(company);
   const { activity } = await (await import('../src/services/dashboard.service.js')).dashboard(company);
-  assert.deepEqual((await listProjects(company, { show: 'finished_month' })).items.map((p) => p.design?.name), ['Done now']);
+  assert.deepEqual((await listProjects(company, OWNER, { show: 'finished_month' })).items.map((p) => p.design?.name), ['Done now']);
   assert.equal(t.installations.finishedThisMonth, 1);
   assert.deepEqual((await listDesigns(company, { show: 'made_month' })).items.map((d) => d.name).sort(), ['Done before', 'Done now']);
   assert.equal(activity.at(-1).created, 2);

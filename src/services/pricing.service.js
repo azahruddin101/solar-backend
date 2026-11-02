@@ -14,11 +14,9 @@ function cleanLimit(value, rules, label) {
   return Math.floor(n);
 }
 
-/** Authoritative custom plan price from the three entitlement dimensions. */
+/** Authoritative custom plan price. Clients and proposals are unlimited; a plan is priced on concurrent sign-ins. */
 export function calculatePlanPrice(input) {
   const cfg = CUSTOM_PLAN_PRICING;
-  const maxClients = cleanLimit(input?.maxClients ?? input?.numberOfClients, cfg.clients, 'Clients');
-  const maxDesigns = cleanLimit(input?.maxDesigns ?? input?.numberOfDesigns, cfg.designs, 'Designs');
   const maxConcurrentLogins = cleanLimit(
     input?.maxConcurrentLogins ?? input?.concurrentLogins,
     cfg.concurrentLogins,
@@ -26,15 +24,13 @@ export function calculatePlanPrice(input) {
   );
 
   const breakdown = {
-    clients: Math.round(dimCost(cfg.clients, maxClients) * 100) / 100,
-    designs: Math.round(dimCost(cfg.designs, maxDesigns) * 100) / 100,
     concurrentLogins: Math.round(dimCost(cfg.concurrentLogins, maxConcurrentLogins) * 100) / 100,
   };
-  const subtotal = breakdown.clients + breakdown.designs + breakdown.concurrentLogins;
+  const subtotal = breakdown.concurrentLogins;
   const total = Math.max(cfg.minimumMonthly || 0, Math.round(subtotal * 100) / 100);
 
   return {
-    configuration: { maxClients, maxDesigns, maxConcurrentLogins },
+    configuration: { maxConcurrentLogins },
     breakdown,
     total,
     currency: cfg.currency,

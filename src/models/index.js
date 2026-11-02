@@ -6,6 +6,7 @@ export { Plan } from './plan.model.js';
 export { PlanRequest } from './planRequest.model.js';
 export { Client } from './client.model.js';
 export { Company } from './company.model.js';
+export { Organization } from './organization.model.js';
 export { Counter } from './counter.model.js';
 export { Design } from './design.model.js';
 export { DesignVersion } from './designVersion.model.js';

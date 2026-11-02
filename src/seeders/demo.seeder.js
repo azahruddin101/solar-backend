@@ -1,38 +1,54 @@
-// Demo tenants: companies with branding images, product catalog, clients and designs.
-// Idempotent — a company whose sign-in email already exists is left untouched.
+// Demo tenants: organizations with branches, branding, catalog, clients and designs.
+// Idempotent — skipped when the branch owner sign-in email already exists.
 import { ROLES } from '../constants/index.js';
-import { Client, Company, Design, User } from '../models/index.js';
+import { Client, Company, Design, Organization, User } from '../models/index.js';
 import { publicPath } from '../services/asset.service.js';
 import { createStarterCatalog } from '../services/catalog.service.js';
 import { putFile } from '../services/storage.service.js';
 import { hashPassword } from '../utils/password.js';
-import { cleanRichText } from '../utils/richText.js';
 import { drawLogo, drawQr, drawSignature } from './brandImages.js';
 import { COMPANIES, DEMO_PASSWORD } from './data/companies.js';
+import { seedOrgTenant } from './orgTenant.seeder.js';
 
 export async function writeBrandImages(company) {
   const website = company.website ? `https://${company.website.replace(/^https?:\/\//, '')}` : `mailto:${company.email}`;
   const images = { logo: drawLogo(company.theme), signature: drawSignature(company.signatoryName || company.name), qr: await drawQr(website) };
   for (const [kind, buffer] of Object.entries(images)) {
-    const fileName = `${company.id}-${kind}-seed.png`; // same naming as multer uploads
+    const fileName = `${company.id}-${kind}-seed.png`;
     await putFile(fileName, buffer, 'image/png');
     company[kind] = publicPath(fileName);
   }
   await company.save();
+  if (company.organization) {
+    const org = await Organization.findById(company.organization);
+    if (org) {
+      org.logo = company.logo;
+      org.signature = company.signature;
+      org.qr = company.qr;
+      await org.save();
+    }
+  }
 }
 
-/** Spread createdAt/updatedAt over the past weeks so lists and "time ago" labels look real. */
 const daysAgo = (n) => new Date(Date.now() - n * 86400000);
 
 async function seedCompany(seed, index) {
-  if (await User.exists({ email: seed.login.email })) return console.log(`  = ${seed.company.name} (already exists, skipped)`);
+  const tenant = await seedOrgTenant({
+    login: seed.login,
+    company: seed.company,
+    password: DEMO_PASSWORD,
+    branchName: seed.branchName,
+    hasBranches: Boolean(seed.hasBranches),
+    branchOwner: seed.branchOwner || null,
+    maxBranches: seed.maxBranches ?? 3,
+    extraBranches: seed.extraBranches || [],
+  });
+  if (!tenant) return console.log(`  = ${seed.company.name} (already exists, skipped)`);
 
-  const company = await Company.create({ ...seed.company, pdfTerms: cleanRichText(seed.company.pdfTerms || '') });
-  await User.create({ email: seed.login.email, name: seed.login.name, passwordHash: await hashPassword(DEMO_PASSWORD), role: ROLES.COMPANY, company: company._id });
-  await writeBrandImages(company);
-  await createStarterCatalog(company._id, { panels: seed.panels, pillars: seed.pillars });
+  const { branch } = tenant;
+  await writeBrandImages(branch);
+  await createStarterCatalog(branch._id, { panels: seed.panels, pillars: seed.pillars });
 
-  // Seed agents for company
   if (Array.isArray(seed.agents)) {
     for (const agent of seed.agents) {
       if (!(await User.exists({ email: agent.email }))) {
@@ -44,7 +60,8 @@ async function seedCompany(seed, index) {
           roles: agent.roles?.length ? agent.roles : agent.jobTitle ? [agent.jobTitle] : [],
           passwordHash: await hashPassword(DEMO_PASSWORD),
           role: ROLES.AGENT,
-          company: company._id,
+          company: branch._id,
+          organization: branch.organization,
           active: true,
         });
       }
@@ -54,13 +71,13 @@ async function seedCompany(seed, index) {
   const clients = new Map();
   for (const [i, { key, ...client }] of seed.clients.entries()) {
     const created = daysAgo(40 - index * 6 - i * 5);
-    clients.set(key, await Client.create({ ...client, company: company._id, createdAt: created, updatedAt: created }));
+    clients.set(key, await Client.create({ ...client, company: branch._id, createdAt: created, updatedAt: created }));
   }
   for (const [i, d] of seed.designs.entries()) {
     const client = clients.get(d.client);
     const updated = daysAgo(i * 3 + index);
     await Design.create({
-      company: company._id,
+      company: branch._id,
       client: client._id,
       name: d.name,
       status: d.status,
@@ -70,7 +87,8 @@ async function seedCompany(seed, index) {
       updatedAt: updated,
     });
   }
-  console.log(`  + ${seed.company.name}: ${seed.panels.length} panels, ${seed.clients.length} clients, ${seed.designs.length} designs → ${seed.login.email}`);
+
+  console.log(`  + ${seed.company.name}: ${tenant.orgAdminEmail ? `company admin ${tenant.orgAdminEmail}, branch owner ${tenant.branchOwnerEmail}` : `owner ${tenant.branchOwnerEmail} (no branches)`}`);
 }
 
 export async function seedDemoData() {

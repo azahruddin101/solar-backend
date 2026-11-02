@@ -3,11 +3,12 @@ import { badRequest, notFound } from '../utils/HttpError.js';
 import { objectId } from '../utils/validators.js';
 
 // what a company without any recorded limit gets: a real cap, never "unlimited"
-const FALLBACK_LIMITS = { maxClients: 25, maxDesigns: 50, maxConcurrentLogins: 2 };
+// (clients and proposals are not limited; the only other cap is the organization's number of branches)
+const FALLBACK_LIMITS = { maxConcurrentLogins: 2 };
 
 export const BILLING_PERIOD_DAYS = 30;
 
-const PLAN_FIELDS = ['name', 'description', 'kind', 'priceMonthly', 'maxClients', 'maxDesigns', 'maxConcurrentLogins', 'selfServe', 'active', 'sortOrder'];
+const PLAN_FIELDS = ['name', 'description', 'kind', 'priceMonthly', 'maxConcurrentLogins', 'selfServe', 'active', 'sortOrder'];
 
 const MAX_FEATURES = 20;
 
@@ -32,7 +33,7 @@ function cleanFeatures(raw) {
 function cleanPlanBody(body, { creating } = {}) {
   const kind = body?.kind === 'custom' ? 'custom' : 'fixed';
   const priceMonthly = Math.max(0, Number(body?.priceMonthly) || 0);
-  const labels = { maxClients: 'Max clients', maxDesigns: 'Max designs', maxConcurrentLogins: 'Concurrent sign-ins' };
+  const labels = { maxConcurrentLogins: 'Concurrent sign-ins' };
   const limits = Object.keys(labels).map((k) => {
     const n = Math.floor(Number(body?.[k]));
     if (!Number.isFinite(n) || n < 1) throw badRequest(`${labels[k]} must be at least 1 (plans have no unlimited option)`);
@@ -44,9 +45,7 @@ function cleanPlanBody(body, { creating } = {}) {
     description: body?.description,
     kind,
     priceMonthly: kind === 'custom' ? 0 : priceMonthly,
-    maxClients: limits[0],
-    maxDesigns: limits[1],
-    maxConcurrentLogins: limits[2],
+    maxConcurrentLogins: limits[0],
     features: cleanFeatures(body?.features),
     selfServe: kind === 'custom' ? false : body?.selfServe !== false,
     active: body?.active !== false,
@@ -100,30 +99,16 @@ export async function deletePlan(id) {
 /** Limits enforced for a company: fixed plans use plan caps; custom uses company.limits (admin-set). */
 export function limitsForCompany(company, plan) {
   if (plan?.kind === 'custom') {
-    return {
-      maxClients: company.limits?.maxClients || FALLBACK_LIMITS.maxClients,
-      maxDesigns: company.limits?.maxDesigns || FALLBACK_LIMITS.maxDesigns,
-      maxConcurrentLogins: company.limits?.maxConcurrentLogins || FALLBACK_LIMITS.maxConcurrentLogins,
-    };
+    return { maxConcurrentLogins: company.limits?.maxConcurrentLogins || FALLBACK_LIMITS.maxConcurrentLogins };
   }
-  if (plan) {
-    return {
-      maxClients: plan.maxClients,
-      maxDesigns: plan.maxDesigns,
-      maxConcurrentLogins: plan.maxConcurrentLogins,
-    };
-  }
+  if (plan) return { maxConcurrentLogins: plan.maxConcurrentLogins };
   return {
-    maxClients: company.limits?.maxClients || FALLBACK_LIMITS.maxClients,
-    maxDesigns: company.limits?.maxDesigns || FALLBACK_LIMITS.maxDesigns,
     maxConcurrentLogins: company.limits?.maxConcurrentLogins || FALLBACK_LIMITS.maxConcurrentLogins,
   };
 }
 
 export function applyPlanLimitsToCompany(company, plan) {
   const limits = limitsForCompany(company, plan);
-  company.limits.maxClients = limits.maxClients;
-  company.limits.maxDesigns = limits.maxDesigns;
   company.limits.maxConcurrentLogins = limits.maxConcurrentLogins;
 }
 
@@ -137,8 +122,6 @@ export function planSummary(plan) {
     description: j.description,
     kind: j.kind,
     priceMonthly: j.priceMonthly,
-    maxClients: j.maxClients,
-    maxDesigns: j.maxDesigns,
     maxConcurrentLogins: j.maxConcurrentLogins,
     features: j.features || [],
     selfServe: j.selfServe,
