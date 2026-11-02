@@ -17,6 +17,7 @@ import { backfillLeadAssignmentCompany, ensureUniqueMetaPage } from './migration
 import { migrateStaffPermissions } from './migrations/staffPermissions.migration.js';
 import { migrateOrganizationHierarchy, backfillUserOrganizationRefs, backfillOrganizationMaxBranches } from './migrations/organizationHierarchy.migration.js';
 import { migrateCompanySetup } from './migrations/companySetup.migration.js';
+import { dropStaleIndexes } from './migrations/staleIndexes.migration.js';
 import { AuthSession } from './models/index.js';
 import { ensureDefaultPlans } from './seeders/plans.seeder.js';
 import { ensureSuperAdmin } from './seeders/superAdmin.seeder.js';
@@ -49,6 +50,7 @@ try {
   process.exit(1);
 }
 if (!env.nodeEnv) logger.warn('NODE_ENV is not set. Set NODE_ENV=production in deployment (security headers, CORS and seed protection depend on it).');
+await dropStaleIndexes(); // before anything writes: old cross-company unique indexes break new companies
 await migrateCatalog();
 await enforceTenantCatalogIsolation();
 await capitalizeProductUnits();

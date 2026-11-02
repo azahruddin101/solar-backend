@@ -79,6 +79,11 @@ const ensureDefaultStatuses = async (companyId) => {
     } catch (error) {
       // Another request created them at the same moment
       if (error.code !== 11000 && !(error.writeErrors || []).length) throw error;
+      // ...but never stay silent if that left the company with no statuses (e.g. a unique index that is not per company)
+      if ((await MetaLeadStatus.countDocuments(base)) === 0) {
+        logMetaError('META_DEFAULT_STATUSES_FAILED', { companyId: String(companyId), reason: error.message?.slice(0, 200) });
+        throw error;
+      }
     }
   }
   await ensureOutcomes(companyId);
@@ -181,7 +186,7 @@ const getLeadStatuses = async (req, res) => {
     await ensureDefaultStatuses(req.leadsCompanyId);
 
     const filter = tenantFilter(req, { isDeleted: false });
-    if (req.user.role !== 'company') filter.isActive = true; // staff pick from the active statuses only
+    if (req.user.role === 'agent') filter.isActive = true; // staff pick from the active statuses only; owners and the company admin see all
 
     const statuses = await MetaLeadStatus.find(filter).sort({ order: 1, createdAt: 1 });
     res.json(statuses.map(serializeStatus));
