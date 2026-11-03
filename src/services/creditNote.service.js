@@ -46,7 +46,7 @@ function goodsOf(bill, notes) {
 /** What the credit note form shows: each returnable line of the bill and how much of it is left to return. */
 export async function returnableOf(company, id) {
   const bill = await Bill.findOne({ _id: objectId(id, 'Bill'), company: company._id }).lean();
-  if (!bill) throw notFound('Bill');
+  if (!bill) throw notFound('Invoice');
   const notes = await CreditNote.find({ company: company._id, bill: bill._id }).select('lines').lean();
   return {
     bill: { id: String(bill._id), billNo: bill.billNo, status: bill.status, total: bill.total, creditedTotal: bill.creditedTotal || 0 },
@@ -178,15 +178,15 @@ export const creditNoteService = {
 
     return createOnce(CreditNote, company, idempotencyKey, () => inTransaction(async (session) => {
       const bill = await Bill.findOne({ _id: id, company: company._id }).session(session).lean();
-      if (!bill) throw notFound('Bill');
-      if (bill.status === 'void') throw badRequest('This bill is void: there is nothing to return');
+      if (!bill) throw notFound('Invoice');
+      if (bill.status === 'void') throw badRequest('This invoice is void: there is nothing to return');
       const notes = await CreditNote.find({ company: company._id, bill: bill._id }).select('lines').session(session).lean();
       const goods = new Map(goodsOf(bill, notes).map((g) => [g.index, g]));
 
       const lines = [];
       for (const w of wanted) {
         const g = goods.get(w.line);
-        if (!g) throw badRequest('Only the goods on a bill can be returned');
+        if (!g) throw badRequest('Only the goods on an invoice can be returned');
         const serialized = (g.line.serials || []).length > 0;
         let qty;
         let serials = [];
@@ -194,7 +194,7 @@ export const creditNoteService = {
           serials = [...new Set((w.serials || []).map(String))];
           if (!serials.length) throw badRequest(`Choose the serial numbers of ${g.line.name} that came back`);
           const bad = serials.filter((s) => !g.serialsLeft.includes(s));
-          if (bad.length) throw badRequest(`${bad.slice(0, 5).join(', ')} ${bad.length === 1 ? 'is' : 'are'} not on this bill or already returned`);
+          if (bad.length) throw badRequest(`${bad.slice(0, 5).join(', ')} ${bad.length === 1 ? 'is' : 'are'} not on this invoice or already returned`);
           qty = serials.length;
         } else {
           qty = round2(w.qty);
@@ -217,7 +217,7 @@ export const creditNoteService = {
       const pricing = pricingOf(lines, bill);
       const total = round2(pricing.total);
       if (!(total > 0)) throw badRequest('The credit note total must be greater than zero');
-      if (round2(n(bill.creditedTotal) + total) - n(bill.total) > 0.01) throw conflict('That is more than this bill’s total. Refresh and try again');
+      if (round2(n(bill.creditedTotal) + total) - n(bill.total) > 0.01) throw conflict('That is more than this invoice’s total. Refresh and try again');
 
       // the refund comes off the payment of the bill; a payment paid back in full is removed (the bill keeps what was paid)
       let payment = bill.payment;
@@ -225,7 +225,7 @@ export const creditNoteService = {
         const row = await Payment.findOne({ _id: bill.payment, company: company._id }).session(session);
         if (row) {
           const left = round2(n(row.amount) - total);
-          if (left < -0.01) throw conflict('The payment held for this bill is less than the refund. Refresh and try again');
+          if (left < -0.01) throw conflict('The payment held for this invoice is less than the refund. Refresh and try again');
           if (left < 0.01) {
             await Payment.deleteOne({ _id: row._id }, { session });
             payment = null;

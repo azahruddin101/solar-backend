@@ -8,7 +8,11 @@ const FALLBACK_LIMITS = { maxConcurrentLogins: 2 };
 
 export const BILLING_PERIOD_DAYS = 30;
 
-const PLAN_FIELDS = ['name', 'description', 'kind', 'priceMonthly', 'maxConcurrentLogins', 'selfServe', 'active', 'sortOrder'];
+const PLAN_FIELDS = ['name', 'description', 'kind', 'priceMonthly', 'maxConcurrentLogins', 'maxBranches', 'maxClients', 'maxDesigns', 'selfServe', 'active', 'sortOrder'];
+
+/** The limits a plan sets: sign-ins (per branch pool) and the company-wide caps (organization.limits). */
+export const PLAN_LIMIT_KEYS = ['maxConcurrentLogins', 'maxBranches', 'maxClients', 'maxDesigns'];
+const LIMIT_LABELS = { maxConcurrentLogins: 'Concurrent sign-ins', maxBranches: 'Branches', maxClients: 'Clients', maxDesigns: 'Designs' };
 
 const MAX_FEATURES = 20;
 
@@ -33,19 +37,18 @@ function cleanFeatures(raw) {
 function cleanPlanBody(body, { creating } = {}) {
   const kind = body?.kind === 'custom' ? 'custom' : 'fixed';
   const priceMonthly = Math.max(0, Number(body?.priceMonthly) || 0);
-  const labels = { maxConcurrentLogins: 'Concurrent sign-ins' };
-  const limits = Object.keys(labels).map((k) => {
+  const limits = Object.fromEntries(PLAN_LIMIT_KEYS.map((k) => {
     const n = Math.floor(Number(body?.[k]));
-    if (!Number.isFinite(n) || n < 1) throw badRequest(`${labels[k]} must be at least 1 (plans have no unlimited option)`);
-    return n;
-  });
+    if (!Number.isFinite(n) || n < 1) throw badRequest(`${LIMIT_LABELS[k]} must be at least 1 (plans have no unlimited option)`);
+    return [k, n];
+  }));
   if (kind === 'fixed' && creating && priceMonthly <= 0) throw badRequest('Fixed plans need a monthly price');
   return {
     name: String(body?.name ?? '').trim(),
     description: body?.description,
     kind,
     priceMonthly: kind === 'custom' ? 0 : priceMonthly,
-    maxConcurrentLogins: limits[0],
+    ...limits,
     features: cleanFeatures(body?.features),
     selfServe: kind === 'custom' ? false : body?.selfServe !== false,
     active: body?.active !== false,
@@ -112,6 +115,24 @@ export function applyPlanLimitsToCompany(company, plan) {
   company.limits.maxConcurrentLogins = limits.maxConcurrentLogins;
 }
 
+/**
+ * Writes a plan's company-wide caps onto the Organization (not saved here). `overrides` are the admin's numbers on a
+ * custom plan. A company without branches always keeps exactly one branch.
+ */
+export function applyPlanToOrganization(org, plan, overrides = {}) {
+  if (!org) return;
+  const pick = (k) => {
+    const n = Math.floor(Number(overrides[k] ?? plan?.[k]));
+    return Number.isFinite(n) && n >= 1 ? n : null;
+  };
+  for (const k of ['maxClients', 'maxDesigns']) {
+    const n = pick(k);
+    if (n != null) org.limits[k] = n;
+  }
+  const branches = pick('maxBranches');
+  if (branches != null) org.limits.maxBranches = org.hasBranches ? branches : 1;
+}
+
 export function planSummary(plan) {
   if (!plan) return null;
   const j = plan.toJSON ? plan.toJSON() : plan;
@@ -123,6 +144,9 @@ export function planSummary(plan) {
     kind: j.kind,
     priceMonthly: j.priceMonthly,
     maxConcurrentLogins: j.maxConcurrentLogins,
+    maxBranches: j.maxBranches,
+    maxClients: j.maxClients,
+    maxDesigns: j.maxDesigns,
     features: j.features || [],
     selfServe: j.selfServe,
     active: j.active,

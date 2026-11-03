@@ -13,6 +13,7 @@ import { revokeUserSessions } from './session.service.js';
 import { resolveClientScopeFilter } from './dataScope.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
 import { dateRangeOnField, escapeRe } from '../utils/listFilters.js';
+import { assertWithinCap } from './orgLimits.service.js';
 
 const FIELDS = ['name', 'phone', 'pan', 'gstNumber', 'projectType', 'roofType', 'address', 'notes', 'consumerNumber', 'source'];
 
@@ -157,6 +158,7 @@ function appendClientLog(client, user, action, message = '') {
 }
 
 export async function createClient(company, user, body) {
+  await assertWithinCap(company, 'clients'); // the plan's cap, counted across all branches
   const name = String(body?.name ?? '').trim();
   const client = new Client({ ...sanitizeClientInput(body), email: validEmail(body?.email, { required: false }), company: company._id, logs: [] });
   appendClientLog(client, user, 'client_created', name);

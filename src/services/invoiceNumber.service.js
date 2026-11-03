@@ -2,7 +2,7 @@
 // The running number lives on the company (`invoiceNumbering.next`) and is reserved with an atomic $inc, so two
 // invoices generated at the same moment can never get the same number. The unique index on {company, invoiceNo}
 // is the final guard: a clash (e.g. the owner moved the counter back over numbers that already exist) is skipped.
-import { Company, Counter, Invoice } from '../models/index.js';
+import { Bill, Company, Counter, Invoice } from '../models/index.js';
 import { badRequest } from '../utils/HttpError.js';
 
 export const DEFAULT_PREFIX = 'INV-';
@@ -33,10 +33,15 @@ export async function peekInvoiceNo(company) {
 
 /** Highest running number already used under `prefix` for this company, or 0. */
 export async function highestUsedSeq(company, prefix) {
-  const rows = await Invoice.find({ company: company._id, invoiceNo: new RegExp(`^${escapeRe(prefix)}\\d+$`) }).select('invoiceNo').lean();
+  // invoices are issued from bills (Bill.billNo) since the sale chain became bill → invoice; older ones are Invoice rows
+  const re = new RegExp(`^${escapeRe(prefix)}\\d+$`);
+  const [older, current] = await Promise.all([
+    Invoice.find({ company: company._id, invoiceNo: re }).select('invoiceNo').lean(),
+    Bill.find({ company: company._id, billNo: re }).select('billNo').lean(),
+  ]);
   let max = 0;
-  for (const r of rows) {
-    const seq = Number(r.invoiceNo.slice(prefix.length));
+  for (const no of [...older.map((r) => r.invoiceNo), ...current.map((r) => r.billNo)]) {
+    const seq = Number(no.slice(prefix.length));
     if (seq > max) max = seq;
   }
   return max;
@@ -91,6 +96,7 @@ const isDuplicateNo = (e) => e?.code === 11000 && (e?.keyPattern?.invoiceNo || /
 export async function createNumberedInvoice(company, fields, { session = null } = {}) {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const invoiceNo = await reserveInvoiceNo(company, session);
+    if (await Bill.exists({ company: company._id, billNo: invoiceNo }).session(session)) continue; // issued as an invoice from a bill
     if (session) {
       if (await Invoice.exists({ company: company._id, invoiceNo }).session(session)) continue;
       const [created] = await Invoice.create([{ ...fields, invoiceNo }], { session });
@@ -101,6 +107,22 @@ export async function createNumberedInvoice(company, fields, { session = null } 
     } catch (e) {
       if (!isDuplicateNo(e)) throw e;
     }
+  }
+  throw badRequest('Could not find a free invoice number. Check the invoice numbering in Settings');
+}
+
+/**
+ * The next free tax invoice number for an invoice issued from bills (stored as Bill.billNo; see bill.service.js).
+ * Must run inside the transaction that creates the row: numbers taken by older invoices or other bills are skipped.
+ */
+export async function reserveFreeInvoiceNo(company, session) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const no = await reserveInvoiceNo(company, session);
+    const [older, current] = await Promise.all([
+      Invoice.exists({ company: company._id, invoiceNo: no }).session(session),
+      Bill.exists({ company: company._id, billNo: no }).session(session),
+    ]);
+    if (!older && !current) return no;
   }
   throw badRequest('Could not find a free invoice number. Check the invoice numbering in Settings');
 }

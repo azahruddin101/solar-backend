@@ -7,6 +7,7 @@ import { email as validEmail, objectId, password as validPassword } from '../uti
 import { hashPassword } from '../utils/password.js';
 import { pickCommercialFromCompanyDoc, pickMastersFromCompanyDoc, effectiveBranchLimits } from './tenant.service.js';
 import { assignPlanAsAdmin } from './subscription.service.js';
+import { applyPlanToOrganization } from './plan.service.js';
 import { updateOwnCompany, updateCatalogSettings, updateLeadForm, updateInstallationSteps, updateAmcTemplates, agentRolesList } from './company.service.js';
 import { updateLoanSteps } from './loan.service.js';
 import { updateSubsidySteps } from './subsidy.service.js';
@@ -14,7 +15,7 @@ import { updateReasons } from './expense.service.js';
 import { ownerCompanyView } from '../utils/companyView.js';
 import { orgHasBranches } from '../constants/tenant.js';
 import { inTransaction } from './stock.service.js';
-import { dashboard as branchDashboard } from './dashboard.service.js';
+import { dashboard as branchDashboard, inventorySnapshot } from './dashboard.service.js';
 
 const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const pct = (part, whole) => (whole ? Math.round((part / whole) * 100) : null);
@@ -159,6 +160,25 @@ function emptyBranchCounts() {
   };
 }
 
+function sumInventory(branches) {
+  return branches.reduce(
+    (a, b) => {
+      const i = b.inventory || {};
+      a.products += i.products || 0;
+      a.value = round2(a.value + (i.value || 0));
+      a.low += i.low || 0;
+      a.outOfStock += i.outOfStock || 0;
+      a.needsReorder += i.needsReorder || 0;
+      return a;
+    },
+    { products: 0, value: 0, low: 0, outOfStock: 0, needsReorder: 0 },
+  );
+}
+
+function emptyInventory() {
+  return { products: 0, value: 0, low: 0, outOfStock: 0, needsReorder: 0 };
+}
+
 function sumTotals(branches) {
   const t = emptyBranchCounts();
   for (const b of branches) {
@@ -192,6 +212,7 @@ export async function getOrganizationOverview(user) {
       currency: org.currency || 'INR',
       branches: [],
       totals: emptyBranchCounts(),
+      inventory: emptyInventory(),
       insights: null,
       generatedAt: now,
     };
@@ -231,6 +252,7 @@ export async function getOrganizationOverview(user) {
     prevGoogleOf,
     prevManualOf,
     insightsList,
+    inventoryList,
   ] = await Promise.all([
     countByBranch(Client, branchIds),
     countByBranch(Design, branchIds),
@@ -266,6 +288,7 @@ export async function getOrganizationOverview(user) {
     countByBranch(leadModels.manual, branchIds, { ...liveLead, createdAt: { $gte: lastMonthStart, $lt: monthStart } }),
     // the same sales & money numbers each branch sees on its own dashboard
     Promise.all(branches.map((b) => branchDashboard({ _id: b._id }).then(branchInsights))),
+    Promise.all(branches.map((b) => inventorySnapshot(b))),
   ]);
 
   const ownerByBranch = new Map(owners.map((o) => [String(o.company), { name: o.name || '', email: o.email || '' }]));
@@ -310,6 +333,7 @@ export async function getOrganizationOverview(user) {
       limits,
       owner: ownerByBranch.get(String(b._id)) || null,
       counts,
+      inventory: inventoryList[i] || emptyInventory(),
       insights: insightsList[i],
     };
   });
@@ -325,6 +349,7 @@ export async function getOrganizationOverview(user) {
     currency: org.currency || 'INR',
     branches: mapped,
     totals: sumTotals(mapped),
+    inventory: sumInventory(mapped),
     insights: combineInsights(insightsList),
     generatedAt: now,
   };
@@ -371,7 +396,6 @@ export async function createBranch(user, body) {
   if (!body?.ownerEmail || !body?.ownerPassword) throw badRequest('Enter the branch owner’s email and password');
   const ownerEmail = validEmail(body.ownerEmail);
   const passwordHash = await hashPassword(validPassword(body.ownerPassword));
-  const asked = pick(body?.limits || {}, ['maxConcurrentLogins']);
 
   return emailsFree(() => inTransaction(async (session) => {
     const org = await lockBranches(orgId, session);
@@ -382,14 +406,7 @@ export async function createBranch(user, body) {
     if (branches.length >= maxBranches) {
       throw badRequest(`This company can have at most ${maxBranches} branch${maxBranches === 1 ? '' : 'es'}. Contact the platform administrator to increase the limit.`);
     }
-    const limits = { ...asked };
-    // without a cap given, the new branch gets up to 2 of the sign-ins the other branches leave free
-    if (limits.maxConcurrentLogins == null) {
-      const pool = org.limits?.maxConcurrentLogins || 0;
-      const free = pool - sumBranchCaps(branches, 'maxConcurrentLogins');
-      if (free < 1) throw badRequest(`All ${pool} sign-ins are given to your other branches. Lower a branch’s sign-in limit first, or ask the platform administrator for more.`);
-      limits.maxConcurrentLogins = Math.min(2, free);
-    }
+    const limits = { maxConcurrentLogins: 1 };
     assertCapsWithinPool(org, [...branches, { _id: 'new', limits }], { id: 'new', limits });
 
     const [branch] = await Company.create([{ organization: org._id, name, email: body?.email, phone: body?.phone, status: 'active', limits }], { session });
@@ -399,19 +416,11 @@ export async function createBranch(user, body) {
 }
 
 export async function updateBranchCaps(user, branchId, body) {
-  const { _id: orgId } = await orgOf(user);
-  const id = objectId(branchId, 'Branch');
-  const limits = pick(body?.limits || body, ['maxConcurrentLogins']);
-  return inTransaction(async (session) => {
-    const org = await lockBranches(orgId, session);
-    const branch = await Company.findOne({ _id: id, organization: org._id }).session(session);
-    if (!branch) throw notFound('Branch');
-    const branches = await Company.find({ organization: org._id }).session(session).lean();
-    assertCapsWithinPool(org, branches, { id: branch._id, limits: { ...branch.limits, ...limits } });
-    Object.assign(branch.limits, limits);
-    await branch.save({ session });
-    return { id: String(branch._id), limits: branch.limits };
-  });
+  const patch = pick(body?.limits || body, ['maxConcurrentLogins']);
+  if (patch.maxConcurrentLogins != null) {
+    throw badRequest('Each branch allows one signed-in device. This limit cannot be changed here.');
+  }
+  throw badRequest('No branch limits to update.');
 }
 
 function pick(obj, keys) {
@@ -496,8 +505,12 @@ export async function createOrganizationWithBranch(body) {
 
     const org = new Organization({ name, email: loginEmail, ...pickCommercialFromCompanyDoc({ ...body, name }), hasBranches });
     org.limits.maxBranches = hasBranches ? Math.max(1, Math.floor(Number(body?.limits?.maxBranches)) || 1) : 1;
+    org.limits.maxClients = Math.max(1, Math.floor(Number(body?.limits?.maxClients)) || org.limits.maxClients);
+    org.limits.maxDesigns = Math.max(1, Math.floor(Number(body?.limits?.maxDesigns)) || org.limits.maxDesigns);
     if (plan) {
       await assignPlanAsAdmin(org, plan.id, { limits: org.limits });
+      // a fixed plan sets the caps; numbers typed on the form (custom plans) win
+      applyPlanToOrganization(org, plan, { maxBranches: hasBranches ? body?.limits?.maxBranches : 1, maxClients: body?.limits?.maxClients, maxDesigns: body?.limits?.maxDesigns });
       org.subscription = { periodStart: new Date(), periodEnd: new Date(Date.now() + 30 * 86400000) };
     }
     await org.save({ session });

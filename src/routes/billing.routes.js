@@ -27,7 +27,8 @@ router.get('/invoices/next-number', invoice, wrap((req) => svc.nextInvoiceNumber
 router.get('/designs/:id', view, wrap((req) => svc.get(req.company, req.params.id)));
 router.get('/clients/:id', view, wrap((req) => svc.getClient(req.company, req.params.id))); // a client's sale chain with no proposal
 
-// the sale chain: e-way bill (stock out) → bill (paid) → invoice (consolidates bills)
+// the sale chain, as users see it: bill (EwayBill model, stock out) → invoice (Bill model, paid, tax invoice numbering).
+// The route paths keep the model names.
 const party = (req) => ({ design: req.query.design, client: req.query.client });
 router.get('/eway-bills', view, wrap((req) => ewayBillService.list(req.company, { page: req.query.page, limit: req.query.limit, status: req.query.status, ...dates(req) })));
 router.get('/eway-bills/open', view, wrap((req) => ewayBillService.open(req.company, party(req))));
@@ -48,7 +49,8 @@ router.get('/credit-notes/:id', view, wrap((req) => creditNoteService.get(req.co
 router.post('/credit-notes/:id/pdf', ownerOnly, uploadCreditNotePdf, wrap((req) => creditNoteService.attachPdf(req.company, req.params.id, req.file?.filename), 201));
 router.post('/bills/:id/void', ownerOnly, validate(S.voidSchema), wrap((req) => billService.void(req.company, req.user, req.params.id, req.body)));
 router.post('/invoices/:id/void', ownerOnly, validate(S.voidSchema), wrap((req) => svc.voidInvoice(req.company, req.user, req.params.id, req.body)));
-router.post('/invoices/from-bills', invoice, validate(S.invoiceFromBillsSchema), wrap((req) => svc.createInvoiceFromBills(req.company, req.user, req.body), 201));
+// invoices are no longer made from bills: the bill (EwayBill model) → invoice (Bill model) chain issues them directly.
+// Older invoices stay readable and can still be voided.
 router.post('/invoices/:id/pdf', invoice, uploadInvoicePdf, wrap((req) => svc.attachInvoicePdf(req.company, req.params.id, req.file?.filename), 201));
 
 export default router;

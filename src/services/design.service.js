@@ -16,6 +16,7 @@ import { deleteFile } from './storage.service.js';
 import { parsePagination, toApiJSONList } from '../utils/lean.js';
 import { dateRangeOnField } from '../utils/listFilters.js';
 import { designShowMatch } from './listPresets.js';
+import { assertWithinCap } from './orgLimits.service.js';
 
 const SUMMARY = ['address', 'kwp', 'panels', 'cost', 'annualKwh', 'pricing'];
 const DESIGN_SAVE_LOG_GAP_MS = 10 * 60 * 1000;
@@ -180,6 +181,7 @@ function parseValidUntil(v) {
 }
 
 export async function createDesign(company, user, body) {
+  await assertWithinCap(company, 'designs'); // the plan's cap, counted across all branches
   const client = await ownClient(company, body?.client);
   const isQuick = body?.type === 'quick';
   const initialData = isQuick
@@ -324,6 +326,7 @@ export async function sendDesignForClientReview(company, user, id, { message } =
 }
 
 export async function duplicateDesign(company, user, id) {
+  await assertWithinCap(company, 'designs');
   const src = await getDesign(company, id);
   const copyName = `${src.name} (copy)`.slice(0, 120);
   // a new draft with everything that describes the quote; not the original's status, client response, review invite,

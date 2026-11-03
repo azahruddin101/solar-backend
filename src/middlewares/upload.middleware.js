@@ -124,7 +124,7 @@ export const uploadAgentPhoto = withStorage(
 /** Optional catalog category icon (small PNG/JPG/WebP). */
 export const uploadCategoryIcon = withStorage(
   memory({ fileSize: 50 * 1024, files: 1 }, imageFilter).single('file'),
-  (req, file) => `${req.company.id}-cat-${req.params.id}-${rand(6)}.${IMAGE_TYPES[file.mimetype] || 'jpg'}`,
+  (req, file) => `${catalogFilePrefix(req)}-cat-${req.params.id}-${rand(6)}.${IMAGE_TYPES[file.mimetype] || 'jpg'}`,
 );
 
 /** Field photo when an installation step is marked done (optional). */
@@ -175,10 +175,13 @@ export const uploadStockBill = withStorage(
   IMAGES_AND_PDF,
 );
 
+/** Catalog files belong to the organization (its branches share the catalog), so they outlive any one branch. */
+const catalogFilePrefix = (req) => req.organization?.id || req.company.id;
+
 /** A PDF kept with a catalog product (datasheet, warranty card, manual…). */
 export const uploadProductDocument = withStorage(
   memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
-  (req, file) => `${req.company.id}-proddoc-${/^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : 'x'}-${rand(8)}.pdf`,
+  (req, file) => `${catalogFilePrefix(req)}-proddoc-${/^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : 'x'}-${rand(8)}.pdf`,
   ['application/pdf'],
 );
 

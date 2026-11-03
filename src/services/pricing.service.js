@@ -14,7 +14,7 @@ function cleanLimit(value, rules, label) {
   return Math.floor(n);
 }
 
-/** Authoritative custom plan price. Clients and proposals are unlimited; a plan is priced on concurrent sign-ins. */
+/** Authoritative custom plan price: concurrent sign-ins, branches, and the company-wide client and design caps. */
 export function calculatePlanPrice(input) {
   const cfg = CUSTOM_PLAN_PRICING;
   const maxConcurrentLogins = cleanLimit(
@@ -23,14 +23,22 @@ export function calculatePlanPrice(input) {
     'Concurrent logins',
   );
 
+  const maxBranches = cleanLimit(input?.maxBranches ?? 1, cfg.branches, 'Branches');
+  const maxClients = cleanLimit(input?.maxClients ?? cfg.clients.included, cfg.clients, 'Clients');
+  const maxDesigns = cleanLimit(input?.maxDesigns ?? cfg.designs.included, cfg.designs, 'Designs');
+
+  const round = (v) => Math.round(v * 100) / 100;
   const breakdown = {
-    concurrentLogins: Math.round(dimCost(cfg.concurrentLogins, maxConcurrentLogins) * 100) / 100,
+    concurrentLogins: round(dimCost(cfg.concurrentLogins, maxConcurrentLogins)),
+    branches: round(dimCost(cfg.branches, maxBranches)),
+    clients: round(dimCost(cfg.clients, maxClients)),
+    designs: round(dimCost(cfg.designs, maxDesigns)),
   };
-  const subtotal = breakdown.concurrentLogins;
+  const subtotal = Object.values(breakdown).reduce((a, b) => a + b, 0);
   const total = Math.max(cfg.minimumMonthly || 0, Math.round(subtotal * 100) / 100);
 
   return {
-    configuration: { maxConcurrentLogins },
+    configuration: { maxConcurrentLogins, maxBranches, maxClients, maxDesigns },
     breakdown,
     total,
     currency: cfg.currency,

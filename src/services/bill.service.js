@@ -10,9 +10,12 @@ import { dateRangeOnField } from '../utils/listFilters.js';
 import { cleanIdempotencyKey, createOnce } from '../utils/idempotency.js';
 import { objectId } from '../utils/validators.js';
 import { archivePdfOnce } from './archivePdf.service.js';
-import { nextDocumentNumber, partyFilter, resolveParty } from './ewayBill.service.js';
+import { partyFilter, resolveParty } from './ewayBill.service.js';
+import { reserveFreeInvoiceNo } from './invoiceNumber.service.js';
 import { authorityInvoicePricing } from './invoicePricing.service.js';
 import { inTransaction, returnStock } from './stock.service.js';
+import { cleanInvoiceDetails } from './billing.service.js';
+import { cleanRichText } from '../utils/richText.js';
 
 const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const n = (v) => Number(v) || 0;
@@ -26,7 +29,7 @@ const totalOf = (design) => money(design?.summary?.pricing?.total ?? design?.sum
  */
 async function cleanServices(company, input, session) {
   const list = Array.isArray(input) ? input : [];
-  if (list.length > 50) throw badRequest('Up to 50 services on a bill');
+  if (list.length > 50) throw badRequest('Up to 50 services on an invoice');
   const ids = list.map((s) => s?.chargeId).filter((id) => /^[0-9a-f]{24}$/i.test(String(id || '')));
   const charges = ids.length ? await InstallationCharge.find({ _id: { $in: ids }, company: company._id }).session(session).lean() : [];
   const byId = new Map(charges.map((c) => [String(c._id), c]));
@@ -93,7 +96,7 @@ export const billService = {
       .populate('ewayBills', 'ewayNo govtEwayNo issuedOn total transport')
       .populate('invoice', 'invoiceNo')
       .lean();
-    if (!row) throw notFound('Bill');
+    if (!row) throw notFound('Invoice');
     return summary(row);
   },
 
@@ -107,7 +110,7 @@ export const billService = {
     const wantIds = [...new Set((Array.isArray(body.ewayBills) ? body.ewayBills : []).map((id) => String(id)))];
     const withGst = body.withGst !== false;
     const payment = body.payment && typeof body.payment === 'object' ? body.payment : {};
-    if (!PAYMENT_MODES.includes(payment.mode)) throw badRequest('Choose how the bill was paid');
+    if (!PAYMENT_MODES.includes(payment.mode)) throw badRequest('Choose how the invoice was paid');
     const receivedOn = payment.receivedOn ? new Date(payment.receivedOn) : new Date();
     if (Number.isNaN(receivedOn.getTime())) throw badRequest('Invalid payment date');
     const issuedOn = body.issuedOn ? new Date(body.issuedOn) : new Date();
@@ -129,13 +132,13 @@ export const billService = {
     return createOnce(Bill, company, idempotencyKey, () => inTransaction(async (session) => {
       const party = await resolveParty(company, body, session);
       const services = await cleanServices(company, body.services, session);
-      if (!wantIds.length && !services.length) throw badRequest('Choose at least one e-way bill or add a service');
+      if (!wantIds.length && !services.length) throw badRequest('Choose at least one bill or add a service');
       const ewayBills = wantIds.length
         ? await EwayBill.find({ _id: { $in: wantIds.map((id) => objectId(id, 'E-way bill')) }, company: company._id, ...partyFilter(party) }).sort({ createdAt: 1 }).session(session).lean()
         : [];
-      if (ewayBills.length !== wantIds.length) throw notFound('E-way bill');
+      if (ewayBills.length !== wantIds.length) throw notFound('Bill');
       const notOpen = ewayBills.filter((e) => e.status !== 'open');
-      if (notOpen.length) throw conflict(`${notOpen.map((e) => e.ewayNo).join(', ')} ${notOpen.length === 1 ? 'is' : 'are'} already on a bill or cancelled`);
+      if (notOpen.length) throw conflict(`${notOpen.map((e) => e.ewayNo).join(', ')} ${notOpen.length === 1 ? 'is' : 'are'} already on an invoice or cancelled`);
 
       const lines = [...ewayBills.flatMap(goodsLines), ...services.map(serviceLine)];
       const pricing = authorityInvoicePricing({
@@ -149,11 +152,11 @@ export const billService = {
       });
       const total = money(pricing.total);
       const billId = new mongoose.Types.ObjectId();
-      const billNo = await nextDocumentNumber(company, 'bill', 'BILL', session);
+      const billNo = await reserveFreeInvoiceNo(company, session); // the invoice is the tax document: the company's invoice numbering
 
       if (ewayBills.length) {
         const marked = await EwayBill.updateMany({ _id: { $in: ewayBills.map((e) => e._id) }, status: 'open' }, { $set: { status: 'billed', bill: billId } }, { session });
-        if (marked.modifiedCount !== ewayBills.length) throw conflict('One of these e-way bills was just billed. Refresh and try again');
+        if (marked.modifiedCount !== ewayBills.length) throw conflict('One of these bills was just invoiced. Refresh and try again');
       }
 
       // the payment row: on a proposal it moves the proposal's balance; on a client alone it stands by itself
@@ -171,13 +174,13 @@ export const billService = {
         client: party.client._id,
         bill: billId,
         receiptNo: billNo, // the bill is the payment document
-        title: party.design ? '' : `Bill ${billNo}`,
+        title: party.design ? '' : `Invoice ${billNo}`,
         billTo: party.design ? null : { name: party.client.name },
         amount: total,
         mode: payment.mode,
         reference: String(payment.reference || '').trim().slice(0, 80),
         receivedOn,
-        note: [`Bill ${billNo}`, String(payment.note || '').trim()].filter(Boolean).join(' · ').slice(0, 300),
+        note: [`Invoice ${billNo}`, String(payment.note || '').trim()].filter(Boolean).join(' · ').slice(0, 300),
         contractTotal,
         balanceAfter,
         createdByName: user?.name || user?.email || '',
@@ -195,6 +198,10 @@ export const billService = {
         services,
         pricing,
         total,
+        // printed on the tax invoice (the Bill document is the invoice since the chain became bill → invoice)
+        billToCompany: String(body.billToCompany || '').trim().slice(0, 120),
+        details: cleanInvoiceDetails(body.details),
+        termsAndConditions: cleanRichText(body.termsAndConditions ?? company.pdfTerms ?? ''),
         paid: { amount: total, mode: payment.mode, reference: String(payment.reference || '').trim().slice(0, 80), receivedOn, note: String(payment.note || '').trim().slice(0, 300) },
         payment: paymentRow._id,
         createdByName: user?.name || user?.email || '',
@@ -213,16 +220,16 @@ export const billService = {
    */
   async void(company, user, id, body = {}) {
     const reason = String(body.reason || '').trim().slice(0, 300);
-    if (!reason) throw badRequest('Give the reason for voiding this bill');
+    if (!reason) throw badRequest('Give the reason for voiding this invoice');
     const returnGoods = Boolean(body.returnStock);
     return inTransaction(async (session) => {
       const bill = await Bill.findOne({ _id: objectId(id, 'Bill'), company: company._id }).session(session);
-      if (!bill) throw notFound('Bill');
-      if (bill.status === 'void') throw badRequest('This bill is already void');
-      if (n(bill.creditedTotal) > 0) throw conflict(`Goods have already been returned on bill ${bill.billNo} (a credit note). It can't be voided; the rest of it stands`);
+      if (!bill) throw notFound('Invoice');
+      if (bill.status === 'void') throw badRequest('This invoice is already void');
+      if (n(bill.creditedTotal) > 0) throw conflict(`Goods have already been returned on invoice ${bill.billNo} (a credit note). It can't be voided; the rest of it stands`);
       if (bill.status === 'invoiced' || bill.invoice) {
         const invoice = bill.invoice ? await Invoice.findById(bill.invoice).select('invoiceNo').session(session).lean() : null;
-        throw conflict(`Bill ${bill.billNo} is on invoice ${invoice?.invoiceNo || ''}. Void that invoice first`.replace('  ', ' '));
+        throw conflict(`Invoice ${bill.billNo} is on the older invoice ${invoice?.invoiceNo || ''}. Void that one first`.replace('  ', ' '));
       }
       const ewayBills = await EwayBill.find({ _id: { $in: bill.ewayBills || [] }, company: company._id, bill: bill._id, status: 'billed' }).session(session);
       if (returnGoods && ewayBills.length) {
@@ -234,7 +241,7 @@ export const billService = {
       for (const e of ewayBills) {
         if (returnGoods) {
           await returnStock(company, e.lines, { ewayBillId: e._id, session });
-          await EwayBill.updateOne({ _id: e._id }, { $set: { status: 'cancelled', bill: null, cancelledAt: new Date(), cancelReason: `Bill ${bill.billNo} voided: ${reason}`.slice(0, 300) } }, { session });
+          await EwayBill.updateOne({ _id: e._id }, { $set: { status: 'cancelled', bill: null, cancelledAt: new Date(), cancelReason: `Invoice ${bill.billNo} voided: ${reason}`.slice(0, 300) } }, { session });
         } else {
           await EwayBill.updateOne({ _id: e._id }, { $set: { status: 'open', bill: null } }, { session });
         }
@@ -244,7 +251,7 @@ export const billService = {
         { $set: { status: 'void', payment: null, voidedAt: new Date(), voidReason: reason, voidedByName: user?.name || user?.email || '' } },
         { session, returnDocument: 'after' },
       ).lean();
-      if (!voided) throw conflict('This bill was just changed. Refresh and try again');
+      if (!voided) throw conflict('This invoice was just changed. Refresh and try again');
       return summary(voided);
     });
   },

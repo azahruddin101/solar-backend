@@ -15,6 +15,7 @@ router.use(branchOnly);
 
 router.get('/', company.getCompany);
 router.get('/subscription', subscription.getSubscription);
+router.get('/subscription/usage', subscription.getUsage);
 router.get('/subscription/upgrades', subscription.listUpgrades);
 router.get('/subscription/quote', subscription.quoteUpgrade);
 router.get('/plan-request', planRequest.companyCurrent);

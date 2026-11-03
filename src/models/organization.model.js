@@ -23,7 +23,11 @@ const organizationSchema = new mongoose.Schema(
     limits: {
       maxConcurrentLogins: { type: Number, default: 2, min: 1 },
       maxBranches: { type: Number, default: 1, min: 1 },
+      // combined across all branches (see services/orgLimits.service.js); set from the plan, or by the admin on a custom plan
+      maxClients: { type: Number, default: 100, min: 1 },
+      maxDesigns: { type: Number, default: 200, min: 1 },
     },
+    capsMigrated: { type: Boolean, default: false }, // migrations/orgCaps.migration.js ran for this company
     subscription: {
       periodStart: { type: Date, default: null },
       periodEnd: { type: Date, default: null },

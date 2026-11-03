@@ -1,13 +1,15 @@
 import mongoose from 'mongoose';
 import { PILLAR_SHAPES, PRODUCT_TYPES } from '../constants/index.js';
 import { capFirst } from '../utils/text.js';
+import { catalogOrganizationPlugin } from './catalogOrganization.plugin.js';
 import { schemaOptions, subSchemaOptions, text } from './schemaOptions.js';
 
-// A product in one of the company's categories. `type` mirrors the category's type. Prices, manufacture dates and
+// A product in one of the organization's categories, shared by all its branches; each branch keeps its own stock. `type` mirrors the category's type. Prices, manufacture dates and
 // stock live on its batches (batch.model.js), and serialized products also have one SerialUnit per physical item.
 const productSchema = new mongoose.Schema(
   {
-    company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+    company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true }, // the branch it was created in
+    organization: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', default: null, index: true }, // owner: shared by all its branches
     category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true, index: true },
     type: { type: String, enum: PRODUCT_TYPES, default: 'general', index: true },
     name: { type: String, required: [true, 'Product name is required'], trim: true, maxlength: 120, set: capFirst },
@@ -46,5 +48,8 @@ const productSchema = new mongoose.Schema(
   { ...schemaOptions, minimize: false },
 );
 productSchema.index({ company: 1, category: 1, watts: 1 });
+productSchema.index({ organization: 1, category: 1 });
+
+productSchema.plugin(catalogOrganizationPlugin);
 
 export const Product = mongoose.model('Product', productSchema);

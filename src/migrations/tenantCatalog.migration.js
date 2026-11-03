@@ -1,29 +1,32 @@
-import { Category, Package, Product } from '../models/index.js';
+import { Category, Company, Package, Product } from '../models/index.js';
 
-/** Remove cross-company catalog links (legacy data or invalid package items). */
+/**
+ * Remove cross-company catalog links (legacy data or invalid package items). The catalog is owned by the organization
+ * (shared by its branches, see sharedCatalog.migration.js), so "the same owner" means the same organization; a
+ * document without one falls back to its branch.
+ */
 export async function enforceTenantCatalogIsolation() {
-  const products = await Product.find({}, { _id: 1, company: 1, category: 1 }).lean();
-  const categories = await Category.find({}, { _id: 1, company: 1 }).lean();
-  const catCompany = new Map(categories.map((c) => [String(c._id), c.company]));
+  const ownerOf = (d) => String(d.organization || d.company);
+  const products = await Product.find({}, { _id: 1, company: 1, organization: 1, category: 1 }).lean();
+  const categories = await Category.find({}, { _id: 1, company: 1, organization: 1 }).lean();
+  const catOwner = new Map(categories.map((c) => [String(c._id), ownerOf(c)]));
 
   let productsFixed = 0;
   for (const p of products) {
-    const catCo = catCompany.get(String(p.category));
-    if (catCo && String(catCo) !== String(p.company)) {
+    const owner = catOwner.get(String(p.category));
+    if (owner && owner !== ownerOf(p)) {
       await Product.deleteOne({ _id: p._id });
       productsFixed += 1;
     }
   }
 
-  const productCompany = new Map(products.map((p) => [String(p._id), p.company]));
+  const productOwner = new Map(products.map((p) => [String(p._id), ownerOf(p)]));
+  const branchOrg = new Map((await Company.find({}).select('_id organization').setOptions({ rawBranch: true }).lean()).map((b) => [String(b._id), String(b.organization || b._id)]));
   const packages = await Package.find({}).lean();
   let packagesFixed = 0;
   for (const pkg of packages) {
-    const companyId = String(pkg.company);
-    const items = (pkg.items || []).filter((it) => {
-      const owner = productCompany.get(String(it.productId));
-      return owner && String(owner) === companyId;
-    });
+    const owner = branchOrg.get(String(pkg.company)) || String(pkg.company);
+    const items = (pkg.items || []).filter((it) => productOwner.get(String(it.productId)) === owner);
     if (items.length !== (pkg.items || []).length) {
       await Package.updateOne({ _id: pkg._id }, { $set: { items } });
       packagesFixed += 1;

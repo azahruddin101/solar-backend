@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { ATTRIBUTE_TYPES, PRODUCT_TYPES } from '../constants/index.js';
 import { capFirst } from '../utils/text.js';
+import { catalogOrganizationPlugin } from './catalogOrganization.plugin.js';
 import { schemaOptions, text } from './schemaOptions.js';
 
 /**
@@ -23,7 +24,8 @@ const attributeSchema = new mongoose.Schema(
 // panels, or as poles); the company can change it, and the products follow (Product.type).
 const categorySchema = new mongoose.Schema(
   {
-    company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+    company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true }, // the branch it was created in
+    organization: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', default: null, index: true }, // owner: shared by all its branches
     name: { type: String, required: [true, 'Category name is required'], trim: true, maxlength: 60, set: capFirst },
     parent: { type: mongoose.Schema.Types.ObjectId, ref: 'ParentCategory', default: null, index: true },
     type: { type: String, enum: PRODUCT_TYPES, default: 'general' },
@@ -34,5 +36,7 @@ const categorySchema = new mongoose.Schema(
   },
   schemaOptions,
 );
+
+categorySchema.plugin(catalogOrganizationPlugin);
 
 export const Category = mongoose.model('Category', categorySchema);

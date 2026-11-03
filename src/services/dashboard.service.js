@@ -1,5 +1,6 @@
 // The company dashboard: sales pipeline, money collected and what needs attention — one company-scoped read.
 import { DEFAULT_PRODUCT_UNITS, DESIGN_STATUS, OPEN_DESIGN_STATUS, ROLES } from '../constants/index.js';
+import { catalogOwner } from '../utils/catalogOwner.js';
 import { Batch, Bill, Category, Client, ClientTicket, Design, EwayBill, Expense, InstallationCharge, Invoice, Loan, Subsidy, Package, Payment, Product, Project, SerialUnit, Supplier, Ticket, User } from '../models/index.js';
 import { warrantyEndDate } from '../models/serialUnit.model.js';
 import { totalOf } from './billing.service.js';
@@ -15,6 +16,27 @@ const DAY = 24 * 60 * 60 * 1000;
 const round = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const STATUSES = DESIGN_STATUS;
 const isOpen = (d) => OPEN_DESIGN_STATUS.includes(d.status);
+
+/** Stock on hand for dashboards: product count, value, low and out-of-stock tallies. */
+export async function inventorySnapshot(company) {
+  const filter = { company: company._id };
+  const products = await Product.find(catalogOwner(company)).select('reorderLevel').lean();
+  const [stock, batches] = await Promise.all([
+    stockSummary(company._id, products.map((p) => p._id)),
+    Batch.find({ ...filter, qtyRemaining: { $gt: 0 } }).select('qtyRemaining purchasePrice basePrice').lean(),
+  ]);
+  const cost = (b) => b.purchasePrice || b.basePrice || 0;
+  const value = round(batches.reduce((a, b) => a + b.qtyRemaining * cost(b), 0));
+  let low = 0;
+  let outOfStock = 0;
+  for (const p of products) {
+    const qty = stock.get(String(p._id))?.stock || 0;
+    const reorder = p.reorderLevel || 0;
+    if (qty <= 0) outOfStock += 1;
+    else if (qty <= reorder) low += 1;
+  }
+  return { products: products.length, value, low, outOfStock, needsReorder: low + outOfStock };
+}
 
 /** The last `n` calendar months, oldest first: [{ key: '2026-04', label: 'Apr 2026' }, …]. */
 function lastMonths(n, now = new Date()) {
@@ -33,8 +55,10 @@ export async function dashboard(company) {
     Client.countDocuments({ company: company._id }),
     Design.find({ company: company._id }).select('-data -logs').populate('client', 'name').lean(),
     Payment.find({ company: company._id }).sort({ receivedOn: -1 }).populate('client', 'name').populate('design', 'name').lean(),
-    Invoice.find({ company: company._id, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $ne: null } }).select('design invoiceNo issuedOn total').lean(),
-  ]);
+    Invoice.find({ company: company._id, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $ne: null } }).select('design invoiceNo issuedOn total createdAt').lean(),
+    // invoices issued since the chain became bill → invoice are Bill rows (billNo is the invoice number)
+    Bill.find({ company: company._id, status: { $ne: 'void' }, design: { $ne: null } }).select('design billNo issuedOn total createdAt').lean(),
+  ]).then(([c, d, p, older, current]) => [c, d, p, [...older, ...current.map(({ billNo, ...b }) => ({ ...b, invoiceNo: billNo }))]]);
 
   // pipeline: how many proposals and how much money sit in each stage
   const stages = Object.fromEntries(STATUSES.map((s) => [s, { count: 0, value: 0, kwp: 0 }]));
@@ -184,12 +208,15 @@ export async function today(company) {
     Project.find(filter).select('design client status steps installationCompletedAt createdAt').populate('design', 'name').populate('client', 'name').populate('steps.assignee', 'name').lean(),
     Loan.find(filter).select('design status amount').lean(),
     Subsidy.find(filter).select('design status centralAmount stateAmount receivedAmount').lean(),
-    Product.find(filter).select('name reorderLevel unit category').populate('category', 'name').lean(),
+    Product.find(catalogOwner(company)).select('name reorderLevel unit category').populate('category', 'name').lean(),
     Batch.find({ ...filter, $or: [{ qtyRemaining: { $gt: 0 } }, { receivedDate: { $gte: months[6].start } }] }).select('product qtyReceived qtyRemaining purchasePrice basePrice receivedDate').lean(),
     SerialUnit.find({ ...filter, status: 'installed', installDate: { $ne: null } }).select('product serialNo installDate installedProject').populate('product', 'name warrantyMonths').populate({ path: 'installedProject', select: 'client', populate: { path: 'client', select: 'name' } }).lean(),
     Expense.aggregate([{ $match: { ...filter, spentOn: { $gte: monthStart } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
     Payment.find(filter).select('design amount mode receivedOn').lean(),
-    Invoice.distinct('design', { ...filter, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $ne: null } }),
+    Promise.all([
+      Invoice.distinct('design', { ...filter, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $ne: null } }),
+      Bill.distinct('design', { ...filter, status: { $ne: 'void' }, design: { $ne: null } }), // invoices issued from bills
+    ]).then(([a, b]) => [...a, ...b]),
     Expense.find({ ...filter, spentOn: { $gte: months[0].start } }).select('amount spentOn').lean(),
     clientTicketOpenCountForCompany(company._id),
     ClientTicket.countDocuments({ ...filter, teamUnread: { $gt: 0 } }),
@@ -403,8 +430,8 @@ export async function counts(company) {
     Project.countDocuments({ ...filter, status: 'active' }),
     User.countDocuments({ ...filter, role: ROLES.AGENT }),
     InstallationCharge.countDocuments(filter),
-    Product.countDocuments(filter),
-    Category.countDocuments(filter),
+    Product.countDocuments(catalogOwner(company)),
+    Category.countDocuments(catalogOwner(company)),
     billingActionCount(company),
     // the same leads each lead table lists
     leadModels.meta.countDocuments({ ...filter, isDeleted: false, processingStatus: 'processed' }),
@@ -486,7 +513,7 @@ export async function staffCounts(user, company) {
   if (may('support')) jobs.support = () => openPlatformTickets(company);
   if (may('inventory')) {
     jobs.packages = () => Package.countDocuments(filter);
-    jobs.products = () => Product.countDocuments(filter);
+    jobs.products = () => Product.countDocuments(catalogOwner(company));
     jobs.suppliers = () => Supplier.countDocuments(filter); // the Suppliers page is part of Inventory
   }
   const keys = Object.keys(jobs);

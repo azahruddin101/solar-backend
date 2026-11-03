@@ -140,6 +140,8 @@ export const catalogSettingsSchema = obj({
 const limits = obj({
   maxConcurrentLogins: f.num({ min: 1, max: 1000, int: true, label: 'Concurrent logins' }).optional(),
   maxBranches: f.num({ min: 1, max: 500, int: true, label: 'Max branches' }).optional(),
+  maxClients: f.num({ min: 1, max: 1e7, int: true, label: 'Max clients' }).optional(), // combined across all branches
+  maxDesigns: f.num({ min: 1, max: 1e7, int: true, label: 'Max designs' }).optional(), // combined across all branches
 });
 
 // A company is set up with or without branches. With branches, `loginEmail` is the company admin and the first
@@ -170,6 +172,9 @@ export const planSchema = obj({
   description: f.textOptional(300, 'Description'),
   priceMonthly: f.num({ min: 0, max: 1e7, label: 'Monthly price' }).optional(),
   maxConcurrentLogins: f.num({ min: 1, max: 1000, int: true, label: 'Concurrent logins' }).optional(),
+  maxBranches: f.num({ min: 1, max: 500, int: true, label: 'Branches' }).optional(),
+  maxClients: f.num({ min: 1, max: 1e7, int: true, label: 'Clients' }).optional(),
+  maxDesigns: f.num({ min: 1, max: 1e7, int: true, label: 'Designs' }).optional(),
   features: z.array(z.string().trim().max(100, 'A feature can be at most 100 characters')).max(20, 'A plan can list up to 20 features').optional(),
 });
 export const planUpdateSchema = planSchema.partial();
@@ -403,6 +408,9 @@ export const portalProposalResponseSchema = obj({
 
 const requestedLimits = obj({
   maxConcurrentLogins: f.num({ min: 1, max: 500, int: true, label: 'Concurrent sign-ins' }).optional(),
+  maxBranches: f.num({ min: 1, max: 500, int: true, label: 'Branches' }).optional(),
+  maxClients: f.num({ min: 1, max: 1e7, int: true, label: 'Clients' }).optional(),
+  maxDesigns: f.num({ min: 1, max: 1e7, int: true, label: 'Designs' }).optional(),
 });
 export const planRequestSchema = obj({
   type: z.enum(['preset', 'custom'], 'Choose a plan type'),
@@ -413,6 +421,9 @@ export const planRequestSchema = obj({
 export const planRequestApproveSchema = obj({
   planName: f.textOptional(80, 'Plan name'),
   maxConcurrentLogins: f.numOptional({ min: 1, max: 500, int: true, label: 'Concurrent sign-ins' }),
+  maxBranches: f.numOptional({ min: 1, max: 500, int: true, label: 'Branches' }),
+  maxClients: f.numOptional({ min: 1, max: 1e7, int: true, label: 'Clients' }),
+  maxDesigns: f.numOptional({ min: 1, max: 1e7, int: true, label: 'Designs' }),
   priceMonthly: f.numOptional({ min: 0, max: 1e7, label: 'Monthly price' }),
   periodDays: f.numOptional({ min: 1, max: 366, int: true, label: 'Period (days)' }),
   adminNotes: f.textOptional(2000, 'Notes'),
@@ -491,15 +502,18 @@ const billServiceSchema = obj({
 
 export const billCreateSchema = obj({
   ...chainParty,
-  ewayBills: z.array(f.objectIdString).max(50, 'Up to 50 e-way bills on a bill').optional(),
-  services: z.array(billServiceSchema).max(50, 'Up to 50 services on a bill').optional(),
+  ewayBills: z.array(f.objectIdString).max(50, 'Up to 50 bills on an invoice').optional(),
+  services: z.array(billServiceSchema).max(50, 'Up to 50 services on an invoice').optional(),
+  billToCompany: f.textOptional(120, 'Company name'),
+  details: invoiceDetailsSchema.optional(),
+  termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
   withGst: z.boolean().optional(),
   discount: f.numOptional({ min: 0, max: 1e10, label: 'Discount' }),
   discountIsPercent: z.boolean().optional(),
   discountRemark: f.textOptional(200, 'Discount remark'),
   issuedOn: z.string().optional(),
   payment: obj({
-    mode: z.enum(PAYMENT_MODES, 'Choose how the bill was paid'),
+    mode: z.enum(PAYMENT_MODES, 'Choose how the invoice was paid'),
     reference: f.textOptional(80, 'Reference'),
     receivedOn: z.string().optional(),
     note: f.textOptional(300, 'Note'),

@@ -16,4 +16,8 @@ export const CUSTOM_PLAN_PRICING = {
     base: 0,
     pricePerUnit: 1000,
   },
+  // Company-wide caps. Clients and designs are counted across every branch together. PLACEHOLDER RATES: set your own.
+  branches: { min: 1, max: 500, included: 1, base: 0, pricePerUnit: 1500 },
+  clients: { min: 1, max: 1e7, included: 100, base: 0, pricePerUnit: 10 },
+  designs: { min: 1, max: 1e7, included: 200, base: 0, pricePerUnit: 5 },
 };

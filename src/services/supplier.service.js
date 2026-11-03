@@ -3,6 +3,7 @@ import { Batch, Category, Product, Supplier } from '../models/index.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
+import { catalogOwner } from '../utils/catalogOwner.js';
 
 const FIELDS = ['name', 'phone', 'email', 'gstNumber', 'address', 'notes', 'categories'];
 
@@ -18,7 +19,7 @@ async function applySupplier(company, supplier, body) {
   if (!name) throw badRequest('Supplier name is required');
   if (body.categories !== undefined) {
     const ids = [...new Set(body.categories.map(String))];
-    const found = await Category.countDocuments({ company: company._id, _id: { $in: ids } });
+    const found = await Category.countDocuments({ ...catalogOwner(company), _id: { $in: ids } });
     if (found !== ids.length) throw badRequest('Choose the supplier’s categories from your product categories');
     supplier.categories = ids;
   }

@@ -1,4 +1,5 @@
-import { Company, Plan } from '../models/index.js';
+import { Company, Organization, Plan } from '../models/index.js';
+import { limitsOf, usageOf } from './orgLimits.service.js';
 import { badRequest, forbidden, notFound } from '../utils/HttpError.js';
 import { objectId } from '../utils/validators.js';
 import { applyPlanLimitsToCompany, BILLING_PERIOD_DAYS, getPlan, limitsForCompany, planSummary } from './plan.service.js';
@@ -41,9 +42,11 @@ export async function subscriptionView(company) {
   const plan = await companyPlan(company);
   const limits = limitsForCompany(company, plan);
   const sub = company.subscription || {};
+  const companyLimits = await limitsOf(company); // company-wide: branches, clients, designs (usage: subscriptionUsage)
   return {
     plan: planSummary(plan),
     limits,
+    companyLimits,
     subscription: {
       periodStart: sub.periodStart || null,
       periodEnd: sub.periodEnd || null,
@@ -60,6 +63,12 @@ export async function subscriptionView(company) {
       cancelAtPeriodEnd: Boolean(sub.cancelAtPeriodEnd),
     },
   };
+}
+
+/** What the whole company holds today against its caps (branches, clients, designs counted across every branch). */
+export async function subscriptionUsage(company) {
+  const [limits, usage] = await Promise.all([limitsOf(company), usageOf(company)]);
+  return { limits, usage };
 }
 
 export async function listUpgradeOptions(company) {

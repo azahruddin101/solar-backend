@@ -90,7 +90,7 @@ export const ewayBillService = {
 
   async get(company, id) {
     const row = await EwayBill.findOne({ _id: objectId(id, 'E-way bill'), company: company._id }).populate('client', 'name phone email address gstNumber').populate('design', 'name').populate('bill', 'billNo').lean();
-    if (!row) throw notFound('E-way bill');
+    if (!row) throw notFound('Bill');
     return summary(row);
   },
 
@@ -102,7 +102,7 @@ export const ewayBillService = {
   async create(company, user, body = {}) {
     const input = Array.isArray(body.lines) ? body.lines.filter((l) => l && l.productId) : [];
     if (!input.length) throw badRequest('Add at least one product from stock');
-    if (input.length !== (body.lines || []).length) throw badRequest('Every line of an e-way bill must be a product from stock');
+    if (input.length !== (body.lines || []).length) throw badRequest('Every line of a bill must be a product from stock');
     const withGst = body.withGst !== false;
     const transport = cleanTransport(body.transport);
     const govtEwayNo = String(body.govtEwayNo ?? '').replace(/\D/g, '');
@@ -120,7 +120,7 @@ export const ewayBillService = {
         company: company._id,
         design: party.design?._id ?? null,
         client: party.client._id,
-        ewayNo: await nextDocumentNumber(company, 'ewaybill', 'EWB', session),
+        ewayNo: await nextDocumentNumber(company, 'ewaybill', 'BILL', session),
         govtEwayNo,
         issuedOn,
         title: party.title,
@@ -140,16 +140,16 @@ export const ewayBillService = {
   async cancel(company, id, body = {}) {
     return inTransaction(async (session) => {
       const row = await EwayBill.findOne({ _id: objectId(id, 'E-way bill'), company: company._id }).session(session);
-      if (!row) throw notFound('E-way bill');
-      if (row.status === 'cancelled') throw badRequest('This e-way bill is already cancelled');
-      if (row.status === 'billed' || row.bill) throw conflict(`E-way bill ${row.ewayNo} is on a bill and can't be cancelled`);
+      if (!row) throw notFound('Bill');
+      if (row.status === 'cancelled') throw badRequest('This bill is already cancelled');
+      if (row.status === 'billed' || row.bill) throw conflict(`Bill ${row.ewayNo} is on an invoice and can't be cancelled`);
       await returnStock(company, row.lines, { ewayBillId: row._id, session });
       const updated = await EwayBill.findOneAndUpdate(
         { _id: row._id, status: 'open' },
         { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: String(body.reason || '').trim().slice(0, 300) } },
         { session, returnDocument: 'after' },
       ).lean();
-      if (!updated) throw conflict('This e-way bill was just changed. Refresh and try again');
+      if (!updated) throw conflict('This bill was just changed. Refresh and try again');
       return summary(updated);
     });
   },

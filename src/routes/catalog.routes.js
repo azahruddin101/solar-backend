@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { permissionOnly, permissionOnlyAny } from '../middlewares/auth.middleware.js';
+import { catalogEditorOnly, permissionOnly, permissionOnlyAny } from '../middlewares/auth.middleware.js';
 import { rateLimit } from '../middlewares/rateLimit.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import * as S from '../validation/schemas.js';
@@ -10,9 +10,10 @@ import { uploadCategoryIcon, uploadProductDocument } from '../middlewares/upload
 // quick no-3D proposal editor) can read them with just 'proposals:view'; managing the catalog itself needs
 // the matching 'inventory' action.
 const view = permissionOnlyAny(['proposals', 'inventory'], 'view');
-const create = permissionOnly('inventory', 'create');
-const update = permissionOnly('inventory', 'update');
-const del = permissionOnly('inventory', 'delete');
+// the catalog is shared by the company's branches: with branches, only the company admin changes it (catalogEditorOnly)
+const create = [permissionOnly('inventory', 'create'), catalogEditorOnly];
+const update = [permissionOnly('inventory', 'update'), catalogEditorOnly];
+const del = [permissionOnly('inventory', 'delete'), catalogEditorOnly];
 
 const crud = (h, createSchema, updateSchema, canView = view) => {
   const router = Router();

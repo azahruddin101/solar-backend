@@ -1,5 +1,5 @@
 import { PERMISSION_CATALOG, ROLES, TENANT_ROLES } from '../constants/index.js';
-import { hasBranchOwnerAccess, managesMasters, orgHasBranches } from '../constants/tenant.js';
+import { hasBranchOwnerAccess, isOrgAdmin, managesMasters, orgHasBranches } from '../constants/tenant.js';
 import { Company, Organization, User } from '../models/index.js';
 import { forbidden, unauthorized } from '../utils/HttpError.js';
 import { verifyMapToken, verifyToken } from '../utils/token.js';
@@ -102,6 +102,15 @@ export const mastersOnly = [authenticate, gate((req, res, next) => {
   if (!managesMasters(req.user, req.organization)) throw forbidden('Only your company admin can change these settings.');
   next();
 }, 'masters')];
+/**
+ * Changing the product catalog (parent categories, categories, products). The catalog is shared by all the company's
+ * branches, so in a company with branches only the company admin changes it; branches keep their own stock. A company
+ * without branches keeps the usual permission check. Used after the route's permission check.
+ */
+export const catalogEditorOnly = gate((req, res, next) => {
+  if (orgHasBranches(req.organization) && !isOrgAdmin(req.user)) throw forbidden('Products and categories are shared by all branches. Only your company admin can change them.');
+  next();
+}, 'catalog-editor');
 export const agentOnly = [authenticate, requireRole(ROLES.AGENT)];
 export const clientOnly = [authenticate, requireRole(ROLES.CLIENT)];
 

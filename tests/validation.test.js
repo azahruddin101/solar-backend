@@ -93,6 +93,9 @@ test('plan limits must be at least 1 (no unlimited)', () => {
   bad(S.adminCompanyCreateSchema, { name: 'Acme', loginEmail: 'a@acme.co', password: 'Goodpass123', limits: { maxBranches: 0 } }, 'limits.maxBranches');
   bad(S.planRequestSchema, { type: 'custom', message: 'x', requestedLimits: { maxConcurrentLogins: 0 } }, 'requestedLimits.maxConcurrentLogins');
   bad(S.planRequestApproveSchema, { maxConcurrentLogins: 0 }, 'maxConcurrentLogins');
-  // clients and proposals are not limited any more: old clients sending these fields are simply ignored
-  ok(S.planSchema, { ...plan, maxClients: 0, maxDesigns: 0 });
+  // the company-wide caps (clients and designs across every branch) also need at least 1
+  ok(S.planSchema, { ...plan, maxBranches: 2, maxClients: 100, maxDesigns: 200 });
+  bad(S.planSchema, { ...plan, maxClients: 0 }, 'maxClients');
+  bad(S.planSchema, { ...plan, maxDesigns: 0 }, 'maxDesigns');
+  bad(S.planRequestApproveSchema, { maxClients: 0 }, 'maxClients');
 });

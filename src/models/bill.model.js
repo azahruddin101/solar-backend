@@ -33,6 +33,8 @@ const paymentSchema = new mongoose.Schema(
 );
 
 /**
+ * Shown to users as the INVOICE (since 2026-11-03 the chain is bill → invoice; this model kept its name so stored
+ * data needs no migration). Numbered with the company's tax invoice numbering (invoiceNumber.service.js).
  * The second document of the sale chain: one or more e-way bills of the same client (or proposal) plus service
  * charges, paid in full when the bill is generated. Its `pricing` (goods lines from the e-way bills, the services, an
  * optional discount and GST) is frozen then; the payment is recorded as a Payment row as well, so the
@@ -56,6 +58,10 @@ const billSchema = new mongoose.Schema(
     status: { type: String, enum: BILL_STATUS, default: 'paid', index: true },
     invoice: { type: ObjectId, ref: 'Invoice', default: null },
     pdfName: text(200),
+    // tax invoice extras (see invoice.model.js for the field meanings)
+    billToCompany: text(120),
+    details: { type: mongoose.Schema.Types.Mixed, default: null },
+    termsAndConditions: { type: String, default: '' },
     // a voided bill stays as the record: its e-way bills went back to open (or to stock) and its payment row was removed
     voidedAt: { type: Date, default: null },
     voidReason: text(300),

@@ -75,3 +75,43 @@ export async function seedShowcaseCatalog(companyId) {
   if (units.length !== (company.productUnits || []).length) await Company.updateOne({ _id: company._id }, { productUnits: units });
   return bySku;
 }
+
+/**
+ * Stock and suppliers for a branch when the org catalog already exists (shared products).
+ * Serial numbers are prefixed with `branchTag` so units stay unique across branches.
+ */
+export async function seedBranchStockForOrgCatalog(companyId, bySku, branchTag = 'b') {
+  const company = await Company.findById(companyId);
+  const suppliers = new Map();
+  for (const { categories, ...fields } of SHOWCASE_SUPPLIERS) {
+    const supplier = await Supplier.create({ ...fields, company: company._id, email: fields.email?.replace('@', `+${branchTag}@`) || undefined });
+    for (const name of categories) suppliers.set(name, supplier);
+  }
+
+  for (const [position, c] of SHOWCASE_CATEGORIES.entries()) {
+    for (const [i, raw] of c.products.entries()) {
+      const product = bySku.get(raw.sku);
+      if (!product) continue;
+      const { price, quantity, manufactureYear = null } = raw;
+      const qty = Math.max(1, Math.round(quantity * 0.35));
+      const older = Math.max(1, Math.round(qty * 0.4));
+      const receipts = [
+        { qty: older, retail: round(price * 0.97), days: 55 - i, batchNo: `${product.sku}-${branchTag}-A` },
+        { qty: qty - older, retail: price, days: 18 - i, batchNo: `${product.sku}-${branchTag}-B` },
+      ].filter((r) => r.qty > 0);
+      for (const [n, r] of receipts.entries()) {
+        await receiveStock(company, product._id, {
+          supplier: suppliers.get(c.name)?._id,
+          batchNo: r.batchNo,
+          mfgYear: manufactureYear ?? undefined,
+          receivedDate: daysAgo(r.days),
+          ...pricesFrom(r.retail),
+          qtyReceived: product.isSerialized ? undefined : r.qty,
+          serials: product.isSerialized
+            ? Array.from({ length: r.qty }, (_, k) => `${product.sku}-${branchTag}-${n + 1}${String(k + 1).padStart(4, '0')}`)
+            : undefined,
+        });
+      }
+    }
+  }
+}

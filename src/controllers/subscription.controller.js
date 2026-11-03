@@ -4,6 +4,10 @@ export async function getSubscription(req, res) {
   res.json(await subscriptionService.subscriptionView(req.company));
 }
 
+export async function getUsage(req, res) {
+  res.json(await subscriptionService.subscriptionUsage(req.company));
+}
+
 export async function listUpgrades(req, res) {
   res.json(await subscriptionService.listUpgradeOptions(req.company));
 }

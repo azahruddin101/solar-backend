@@ -4,9 +4,13 @@ import { Company, Plan, PlanRequest } from '../models/index.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { objectId } from '../utils/validators.js';
 import { calculatePlanPrice } from './pricing.service.js';
-import { applyPlanLimitsToCompany, BILLING_PERIOD_DAYS, planSummary } from './plan.service.js';
+import { Organization } from '../models/index.js';
+import { applyPlanLimitsToCompany, applyPlanToOrganization, BILLING_PERIOD_DAYS, planSummary } from './plan.service.js';
 
 const DAY = 86400000;
+
+const limitsOfPlan = (plan) => ({ maxConcurrentLogins: plan.maxConcurrentLogins, maxBranches: plan.maxBranches, maxClients: plan.maxClients, maxDesigns: plan.maxDesigns });
+const organizationOf = (company) => (company.organization ? Organization.findById(company.organization) : null);
 
 function requestView(doc, companyName, planDoc) {
   const j = doc.toJSON ? doc.toJSON() : doc;
@@ -54,7 +58,7 @@ async function createPlanRequest(company, body) {
       type: 'preset',
       plan: plan._id,
       message,
-      requestedLimits: { maxConcurrentLogins: plan.maxConcurrentLogins },
+      requestedLimits: limitsOfPlan(plan),
     });
     return requestView(row, company.name, plan);
   }
@@ -67,6 +71,9 @@ async function createPlanRequest(company, body) {
     message,
     requestedLimits: {
       maxConcurrentLogins: cleanLimit(limits.maxConcurrentLogins, 2, 'Concurrent sign-ins'),
+      maxBranches: cleanLimit(limits.maxBranches, 1, 'Branches'),
+      maxClients: cleanLimit(limits.maxClients, 100, 'Clients'),
+      maxDesigns: cleanLimit(limits.maxDesigns, 200, 'Designs'),
     },
   });
   return requestView(row, company.name);
@@ -113,6 +120,7 @@ export async function approvePlanRequest(id, body, admin) {
   const company = await Company.findById(row.company);
   if (!company) throw notFound('Company');
   const days = Math.min(366, Math.max(1, Math.floor(Number(body?.periodDays)) || BILLING_PERIOD_DAYS));
+  let org = null;
 
   if (row.type === 'preset') {
     const plan = await Plan.findById(row.plan);
@@ -121,11 +129,17 @@ export async function approvePlanRequest(id, body, admin) {
     applyPlanLimitsToCompany(company, plan);
     row.planName = plan.name;
     row.quotedPriceMonthly = plan.priceMonthly;
-    row.quotedLimits = { maxConcurrentLogins: plan.maxConcurrentLogins };
+    row.quotedLimits = limitsOfPlan(plan);
+    org = await organizationOf(company);
+    applyPlanToOrganization(org, plan);
   } else {
     const planName = String(body?.planName ?? '').trim() || `${company.name} Custom`;
+    const asked = row.requestedLimits;
     const limits = {
-      maxConcurrentLogins: cleanLimit(body?.maxConcurrentLogins, row.requestedLimits.maxConcurrentLogins, 'Concurrent sign-ins'),
+      maxConcurrentLogins: cleanLimit(body?.maxConcurrentLogins, asked.maxConcurrentLogins, 'Concurrent sign-ins'),
+      maxBranches: cleanLimit(body?.maxBranches, asked.maxBranches, 'Branches'),
+      maxClients: cleanLimit(body?.maxClients, asked.maxClients, 'Clients'),
+      maxDesigns: cleanLimit(body?.maxDesigns, asked.maxDesigns, 'Designs'),
     };
     const priced = calculatePlanPrice(limits); // also range-checks the limits
     const priceMonthly = body?.priceMonthly === undefined || body.priceMonthly === '' ? priced.total : Number(body.priceMonthly);
@@ -143,6 +157,8 @@ export async function approvePlanRequest(id, body, admin) {
     });
     company.planRef = plan._id;
     company.limits.maxConcurrentLogins = plan.maxConcurrentLogins;
+    org = await organizationOf(company);
+    applyPlanToOrganization(org, plan);
     row.dedicatedPlan = plan._id;
     row.planName = planName;
     row.quotedPriceMonthly = priceMonthly;
@@ -151,6 +167,11 @@ export async function approvePlanRequest(id, body, admin) {
 
   startNewPeriod(company, days);
   await company.save();
+  if (org) {
+    const held = await Company.countDocuments({ organization: org._id });
+    if (org.limits.maxBranches < held) org.limits.maxBranches = held; // never below the branches it already has
+    await org.save();
+  }
   row.status = 'approved';
   row.adminNotes = body?.adminNotes ?? row.adminNotes;
   row.decidedBy = admin?._id || null;

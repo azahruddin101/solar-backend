@@ -3,9 +3,11 @@ import { ROLES } from '../constants/index.js';
 import { AuthSession, User } from '../models/index.js';
 import { HttpError } from '../utils/HttpError.js';
 import { sessionExpiresAt } from '../utils/token.js';
-import { effectiveLimitsForCompany } from './subscription.service.js';
 
 export const DEVICE_LIMIT_CODE = 'DEVICE_LIMIT';
+
+/** Branch owners (and company admins) may only have one active sign-in session at a time. */
+const MAX_DEVICES = 1;
 
 export function newSessionId() {
   return crypto.randomUUID();
@@ -96,11 +98,11 @@ export async function revokeAllCompanySessions(companyId) {
  * re-count and, if the plan's device limit was passed, remove this session and refuse it.
  */
 export async function confirmWithinDeviceLimit(company, sessionId) {
-  const max = Math.max(1, (await effectiveLimitsForCompany(company)).maxConcurrentLogins || 1);
+  const max = MAX_DEVICES;
   const active = await AuthSession.countDocuments({ ...(await ownerSessionFilter(company._id)), expiresAt: { $gt: new Date() } });
   if (active > max) {
     await AuthSession.deleteOne({ sessionId });
-    throw new HttpError(403, `Your plan allows ${max} device${max === 1 ? '' : 's'} signed in at once. Sign out on another device first.`, DEVICE_LIMIT_CODE, { max, active: active - 1, sessions: await listActiveCompanySessions(company._id) });
+    throw new HttpError(403, 'Another device is already signed in. Sign out there first, then try again.', DEVICE_LIMIT_CODE, { max, active: active - 1, sessions: await listActiveCompanySessions(company._id) });
   }
 }
 
@@ -115,23 +117,23 @@ async function listUserSessions(userId) {
  * organization's sign-in total and never against a branch's (and making room only signs out their own devices -
  * never a branch owner's).
  */
-const adminLimit = (organization) => Math.max(1, organization?.limits?.maxConcurrentLogins || 1);
+const adminLimit = () => MAX_DEVICES;
 const deviceLimitError = (max, active, sessions) => new HttpError(
   403,
-  max === 1 ? 'Another device is already signed in. Sign out there first, then try again.' : `Your plan allows ${max} devices signed in at once. Sign out on another device first.`,
+  'Another device is already signed in. Sign out there first, then try again.',
   DEVICE_LIMIT_CODE,
   { max, active, sessions },
 );
 
 export async function assertAdminLoginAllowed(user, organization) {
-  const max = adminLimit(organization);
+  const max = adminLimit();
   const active = await AuthSession.countDocuments({ user: user._id, expiresAt: { $gt: new Date() } });
   if (active >= max) throw deviceLimitError(max, active, await listUserSessions(user._id));
 }
 
 /** After registering the admin's session: two sign-ins at once can both pass the check above, so re-count. */
 export async function confirmAdminWithinLimit(user, organization, sessionId) {
-  const max = adminLimit(organization);
+  const max = adminLimit();
   const active = await AuthSession.countDocuments({ user: user._id, expiresAt: { $gt: new Date() } });
   if (active > max) {
     await AuthSession.deleteOne({ sessionId });
@@ -140,17 +142,14 @@ export async function confirmAdminWithinLimit(user, organization, sessionId) {
 }
 
 export async function assertConcurrentLoginAllowed(company) {
-  const limits = await effectiveLimitsForCompany(company);
-  const max = Math.max(1, limits.maxConcurrentLogins || 1);
+  const max = MAX_DEVICES;
   await purgeExpiredForCompany(company._id);
   const active = await AuthSession.countDocuments({ ...(await ownerSessionFilter(company._id)), expiresAt: { $gt: new Date() } });
   if (active >= max) {
     const sessions = await listActiveCompanySessions(company._id);
     throw new HttpError(
       403,
-      max === 1
-        ? 'Another device is already signed in. Sign out there first, then try again.'
-        : `Your plan allows ${max} devices signed in at once. Sign out on another device first.`,
+      'Another device is already signed in. Sign out there first, then try again.',
       DEVICE_LIMIT_CODE,
       { max, active, sessions },
     );

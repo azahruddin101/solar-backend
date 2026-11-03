@@ -2,9 +2,11 @@
 import mongoose from 'mongoose';
 import { DEFAULT_AGENT_ROLES, DEFAULT_STEP_PRIORITY, ROLES, STEP_PRIORITIES } from '../constants/index.js';
 import { AuthSession, Client, Company, Design, Notification, Organization, Plan, Product, User } from '../models/index.js';
-import { applyPlanLimitsToCompany, planSummary } from './plan.service.js';
+import { applyPlanLimitsToCompany, applyPlanToOrganization, planSummary } from './plan.service.js';
+import { usageOf } from './orgLimits.service.js';
 import { parseInvoiceNumbering } from './invoiceNumber.service.js';
 import { assignPlanAsAdmin, ensureCompanySubscription, subscriptionView } from './subscription.service.js';
+import { impersonationSession } from './auth.service.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
 import { hashPassword } from '../utils/password.js';
 import { pick } from '../utils/pick.js';
@@ -143,6 +145,8 @@ export async function listCompanies(filter = {}) {
       organizationName: org?.name || '',
       hasBranches: org ? orgHasBranches(org) : false,
       maxBranches: org?.limits?.maxBranches ?? 1,
+      maxClients: org?.limits?.maxClients ?? null, // company-wide, across every branch
+      maxDesigns: org?.limits?.maxDesigns ?? null,
       poolLogins: org?.limits?.maxConcurrentLogins ?? null, // with branches: the company-wide sign-in pool the admin edits
       adminEmail: org && orgHasBranches(org) ? adminOf.get(String(org._id)) || '' : '',
       plan: plan?.code || c.plan,
@@ -190,6 +194,14 @@ export async function updateCompanyAsAdmin(id, body) {
   const changed = (v, now) => (v != null && whole(v) !== now ? whole(v) : null);
   const logins = changed(body?.limits?.maxConcurrentLogins, withBranches ? org.limits?.maxConcurrentLogins : company.limits?.maxConcurrentLogins);
   const maxBranches = withBranches ? changed(body?.limits?.maxBranches, org.limits?.maxBranches) : null;
+  // company-wide caps, counted across every branch together; never below what the company already holds
+  const maxClients = org ? changed(body?.limits?.maxClients, org.limits?.maxClients) : null;
+  const maxDesigns = org ? changed(body?.limits?.maxDesigns, org.limits?.maxDesigns) : null;
+  if (org && (maxClients != null || maxDesigns != null)) {
+    const usage = await usageOf(company);
+    if (maxClients != null && maxClients < usage.clients) throw badRequest(`This company already has ${usage.clients} clients across its branches; the limit can’t be lower.`);
+    if (maxDesigns != null && maxDesigns < usage.designs) throw badRequest(`This company already has ${usage.designs} designs across its branches; the limit can’t be lower.`);
+  }
   if (withBranches) {
     const branches = await Company.find({ organization: org._id }).select('limits').lean();
     const held = branches.reduce((a, b) => a + (Number(b.limits?.maxConcurrentLogins) || 0), 0);
@@ -198,12 +210,22 @@ export async function updateCompanyAsAdmin(id, body) {
   }
 
   applyAdminFields(company, { ...body, limits: withBranches ? undefined : body?.limits });
-  if (body?.planId) await assignPlanAsAdmin(company, body.planId, { limits: company.limits });
+  const plan = body?.planId ? await assignPlanAsAdmin(company, body.planId, { limits: company.limits }) : null;
   await ensureCompanySubscription(company);
   await company.save();
   // feature switches are shared by the whole company (read from the organization)
   if (org && body?.features) Object.assign(org.features, pick(body.features, ['pdfBranding', 'excelImport']));
-  if (org && (logins != null || maxBranches != null || body?.features)) {
+  // moving to a plan sets the company-wide caps from it (never below what the company already holds); numbers typed in the same save win
+  if (org && plan) {
+    applyPlanToOrganization(org, plan);
+    const [usage, held] = [await usageOf(company), await Company.countDocuments({ organization: org._id })];
+    org.limits.maxClients = Math.max(org.limits.maxClients, usage.clients);
+    org.limits.maxDesigns = Math.max(org.limits.maxDesigns, usage.designs);
+    org.limits.maxBranches = Math.max(org.limits.maxBranches, held);
+  }
+  if (org && (logins != null || maxBranches != null || maxClients != null || maxDesigns != null || plan || body?.features)) {
+    if (maxClients != null) org.limits.maxClients = maxClients;
+    if (maxDesigns != null) org.limits.maxDesigns = maxDesigns;
     if (logins != null) org.limits.maxConcurrentLogins = logins;
     if (maxBranches != null) org.limits.maxBranches = maxBranches; // a company without branches always keeps exactly one
     await org.save();
@@ -234,14 +256,20 @@ export async function resetCompanyPassword(id, plain, who = 'owner') {
 }
 
 /** Open the company's workspace as them (short-lived token, flagged as impersonation). */
-export async function impersonate(id, admin) {
+export async function impersonate(id, admin, who = 'owner') {
   const company = await getOrFail(id);
   if (company.status !== 'active') throw badRequest('Activate the company before signing in as it');
-  const user = await loginOf(company._id);
-  if (!user) throw notFound('Company login');
-  const sid = newSessionId();
-  await registerSession({ user: admin, sessionId: sid, userAgent: 'impersonation', impersonation: true }); // ends when the admin leaves the company (or after 2 h)
-  return { token: signToken(user, { by: admin.id, sid }), user, company: await ownerCompanyView(company), impersonated: true };
+  let user;
+  if (who === 'admin') {
+    const org = company.organization ? await Organization.findById(company.organization) : null;
+    if (!orgHasBranches(org)) throw badRequest('This company does not have a company admin workspace');
+    user = await adminOf(company);
+    if (!user) throw notFound('Company admin login');
+  } else {
+    user = await loginOf(company._id);
+    if (!user) throw notFound('Company login');
+  }
+  return impersonationSession(user, admin, { hintBranch: company });
 }
 
 /**

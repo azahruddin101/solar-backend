@@ -9,6 +9,7 @@
     "start:pm2": "pm2 start ecosystem.config.cjs",
     "uploads:s3": "node --env-file-if-exists=.env src/scripts/uploads-to-s3.js",
     "seed:showcase": "node --env-file-if-exists=.env src/seeders/showcase.js",
+    "seed:testing": "node --env-file-if-exists=.env src/seeders/testingCompany.js",
     "seed:catalog": "node --env-file-if-exists=.env src/seeders/catalog.js",
     "seed:inventory": "node --env-file-if-exists=.env src/seeders/inventory.js",
     "seed": "node --env-file-if-exists=.env src/seeders/index.js",

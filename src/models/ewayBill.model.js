@@ -23,6 +23,7 @@ const transportSchema = new mongoose.Schema(
 );
 
 /**
+ * Shown to users as the BILL (since 2026-11-03; numbered BILL-0001…). The model kept its name so stored data needs no migration.
  * Goods leaving stock for a client: the first document of the sale chain (e-way bill → bill → invoice). Its lines are
  * taken from stock when it is created (stock.service.js allocateInvoiceLines) and priced from their batches; `pricing`
  * is frozen then. Hangs on a booked proposal (`design`) or, for a sale with no proposal, on the client alone.

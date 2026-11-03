@@ -6,7 +6,7 @@ import path from 'node:path';
 import { env } from '../config/env.js';
 import { hasPermission } from '../middlewares/auth.middleware.js';
 import { ROLES } from '../constants/index.js';
-import { Client, ClientTicket, Ticket } from '../models/index.js';
+import { Client, ClientTicket, Product, Ticket } from '../models/index.js';
 import { resolveClientScopeFilter } from './dataScope.service.js';
 import { forbidden, notFound } from '../utils/HttpError.js';
 
@@ -25,7 +25,7 @@ const RECEIPT_PDF = /^[0-9a-f]{24}-receipt-/; // payment receipts: <companyId>-r
 const EWAY_BILL_PDF = /^[0-9a-f]{24}-ewaybill-/; // archived e-way bills: <companyId>-ewaybill-<ewayBillId>-…
 const SALE_BILL_PDF = /^[0-9a-f]{24}-salebill-/; // archived bills: <companyId>-salebill-<billId>-…
 const CREDIT_NOTE_PDF = /^[0-9a-f]{24}-creditnote-/; // archived credit notes: <companyId>-creditnote-<creditNoteId>-…
-const PRODUCT_DOC = /^[0-9a-f]{24}-proddoc-/; // product PDFs: <companyId>-proddoc-<productId>-…
+const PRODUCT_DOC = /^[0-9a-f]{24}-proddoc-/; // product PDFs: <organizationId or, before shared catalogs, companyId>-proddoc-<productId>-…
 
 const STOCK_BILL = /^[0-9a-f]{24}-bill-/; // supplier bills: <companyId>-bill-<batchId>-…
 const LOAN_DOC = /^[0-9a-f]{24}-loandoc-/; // loan step documents: <companyId>-loandoc-<loanId>-…
@@ -93,8 +93,10 @@ export async function assertCanOpen(user, name) {
   } else if (EXPENSE_BILL.test(name)) {
     if (mayView('expenses')) return;
   } else if (PRODUCT_DOC.test(name)) {
-    // whoever may see the catalog's products (see catalog.routes.js)
-    if (['proposals', 'inventory', 'finances', 'tasks'].some(mayView)) return;
+    // whoever may see the catalog's products (see catalog.routes.js), in any branch of the organization that owns it
+    const mayViewProducts = ['proposals', 'inventory', 'finances', 'tasks'].some((area) => hasPermission(user, area, 'view'));
+    if (mayViewProducts && (ownCompany || (user.organization && String(user.organization) === owner))) return;
+    if (mayViewProducts && user.organization && (await Product.exists({ organization: user.organization, 'documents.url': `/uploads/${name}` }))) return;
   }
   throw forbidden('You do not have access to this file');
 }

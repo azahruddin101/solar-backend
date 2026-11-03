@@ -25,7 +25,7 @@ const SELF_SERVICE = [/^\/api\/auth\//, /^\/api\/notifications(\/|$)/, /^\/api\/
 
 test('the route walk finds the API', () => {
   assert.ok(all.length > 100, `only ${all.length} routes found`);
-  assert.ok(all.some((r) => r.path === '/api/billing/invoices/from-bills'));
+  assert.ok(!all.some((r) => r.path === '/api/billing/invoices/from-bills')); // invoices are issued from bills directly now
 });
 
 test('every API route is gated by a role or a permission', () => {
@@ -51,7 +51,6 @@ test('finance actions are separate permissions', () => {
   assert.ok(gate('POST', '/api/billing/eway-bills').includes('permission:finances:create_eway_bill'));
   assert.ok(gate('POST', '/api/billing/eway-bills/:id/cancel').includes('permission:finances:create_eway_bill'));
   assert.ok(gate('POST', '/api/billing/bills').includes('permission:finances:create_bill'));
-  assert.ok(gate('POST', '/api/billing/invoices/from-bills').includes('permission:finances:create_invoice'));
   assert.ok(gate('GET', '/api/billing/bills/uninvoiced').includes('permission:finances:view'));
 });
 

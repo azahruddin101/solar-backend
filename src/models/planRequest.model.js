@@ -13,6 +13,9 @@ const planRequestSchema = new mongoose.Schema(
     message: text(2000),
     requestedLimits: {
       maxConcurrentLogins: { type: Number, default: 2, min: 1 },
+      maxBranches: { type: Number, default: 1, min: 1 },
+      maxClients: { type: Number, default: 100, min: 1 },
+      maxDesigns: { type: Number, default: 200, min: 1 },
     },
     adminNotes: text(2000),
     // what the admin approved
@@ -20,6 +23,9 @@ const planRequestSchema = new mongoose.Schema(
     quotedPriceMonthly: { type: Number, default: 0, min: 0 },
     quotedLimits: {
       maxConcurrentLogins: { type: Number, default: 2, min: 1 },
+      maxBranches: { type: Number, default: 1, min: 1 },
+      maxClients: { type: Number, default: 100, min: 1 },
+      maxDesigns: { type: Number, default: 200, min: 1 },
     },
     dedicatedPlan: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan', default: null },
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

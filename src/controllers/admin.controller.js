@@ -31,7 +31,8 @@ export async function resetPassword(req, res) {
 }
 
 export async function impersonate(req, res) {
-  res.json(await companyService.impersonate(req.params.id, req.user));
+  const who = req.body?.who === 'admin' ? 'admin' : 'owner';
+  res.json(await companyService.impersonate(req.params.id, req.user, who));
 }
 
 export async function deleteCompany(req, res) {

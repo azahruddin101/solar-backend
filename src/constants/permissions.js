@@ -55,12 +55,12 @@ export const PERMISSION_CATALOG = {
   },
   finances: {
     label: 'Finances',
-    description: 'E-way bills, bills (payments) and invoices',
+    description: 'Bills (goods out of stock) and invoices (paid, tax invoices)',
     actions: {
       view: 'View',
-      create_eway_bill: 'Create e-way bill',
-      create_bill: 'Create bill',
-      create_invoice: 'Create invoice',
+      create_eway_bill: 'Create bill',
+      create_bill: 'Create invoice',
+      create_invoice: 'Create AMC parts invoice', // invoices are now issued from bills (create_bill); this one is only for AMC parts
     },
   },
   inventory: {

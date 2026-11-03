@@ -99,7 +99,12 @@ export const billingService = {
     const match = { company: company._id, status: 'won', ...(dateRangeOnField('createdAt', from, to) || {}) };
     const designs = await Design.find(match).select('-data').populate('client', 'name phone email').sort({ updatedAt: -1 });
     const sums = await Payment.aggregate([{ $match: { company: company._id, design: { $in: designs.map((d) => d._id) } } }, { $group: { _id: '$design', paid: { $sum: '$amount' }, count: { $sum: 1 }, lastPaidOn: { $max: '$receivedOn' } } }]);
-    const invoices = await Invoice.find({ company: company._id, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $in: designs.map((d) => d._id) } }).select('design invoiceNo createdAt').sort({ createdAt: -1 });
+    const ids = designs.map((d) => d._id);
+    const [older, current] = await Promise.all([
+      Invoice.find({ company: company._id, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $in: ids } }).select('design invoiceNo createdAt').lean(),
+      Bill.find({ company: company._id, status: { $ne: 'void' }, design: { $in: ids } }).select('design billNo createdAt').lean(), // invoices issued from bills
+    ]);
+    const invoices = [...older, ...current.map((b) => ({ _id: b._id, design: b.design, invoiceNo: b.billNo, createdAt: b.createdAt }))].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     const latestInv = new Map();
     for (const inv of invoices) {
       const k = String(inv.design);
@@ -145,9 +150,13 @@ export const billingService = {
     const design = await getDesign(company, designId);
     const result = await ledger(company, design);
     // Get the most recent invoice's T&C for pre-filling the form
-    const latestInvoice = await Invoice.findOne({ company: company._id, design: design._id, kind: { $ne: 'amc_parts' } }).sort({ createdAt: -1 }).lean();
-    result.previousTermsAndConditions = latestInvoice?.termsAndConditions || '';
-    result.previousBillToCompany = latestInvoice?.billToCompany || '';
+    // invoices are issued from bills now (Bill rows); older ones are Invoice rows: pre-fill from the latest that has it
+    const [latestBill, latestOlder] = await Promise.all([
+      Bill.findOne({ company: company._id, design: design._id, status: { $ne: 'void' } }).sort({ createdAt: -1 }).lean(),
+      Invoice.findOne({ company: company._id, design: design._id, kind: { $ne: 'amc_parts' } }).sort({ createdAt: -1 }).lean(),
+    ]);
+    result.previousTermsAndConditions = latestBill?.termsAndConditions || latestOlder?.termsAndConditions || '';
+    result.previousBillToCompany = latestBill?.billToCompany || latestOlder?.billToCompany || '';
     result.nextInvoiceNo = await peekInvoiceNo(company);
     return result;
   },

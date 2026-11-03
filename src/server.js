@@ -4,6 +4,8 @@ import { connectDb } from './config/db.js';
 import { env, redactMongoUri } from './config/env.js';
 import { migrateCatalog } from './migrations/catalog.migration.js';
 import { enforceTenantCatalogIsolation } from './migrations/tenantCatalog.migration.js';
+import { migrateOrgCaps } from './migrations/orgCaps.migration.js';
+import { migrateSharedCatalog } from './migrations/sharedCatalog.migration.js';
 import { ensureSessionTtlIndex } from './migrations/authSessionTtl.migration.js';
 import { capUnlimitedLimits } from './migrations/limits.migration.js';
 import { fixShareTokenIndex } from './migrations/shareToken.migration.js';
@@ -52,7 +54,6 @@ try {
 if (!env.nodeEnv) logger.warn('NODE_ENV is not set. Set NODE_ENV=production in deployment (security headers, CORS and seed protection depend on it).');
 await dropStaleIndexes(); // before anything writes: old cross-company unique indexes break new companies
 await migrateCatalog();
-await enforceTenantCatalogIsolation();
 await capitalizeProductUnits();
 await capitalizeProductNames();
 await capitalizeClientNames();
@@ -69,9 +70,12 @@ await migrateOrganizationHierarchy();
 await backfillOrganizationMaxBranches();
 await backfillUserOrganizationRefs();
 await migrateCompanySetup();
+await migrateSharedCatalog(); // needs every branch linked to its organization (above)
+await enforceTenantCatalogIsolation();
 await backfillLeadAssignmentCompany();
 await ensureUniqueMetaPage();
 await ensureDefaultPlans();
+await migrateOrgCaps(); // after the plans carry their caps
 await AuthSession.deleteMany({ $or: [{ expiresAt: null }, { expiresAt: { $exists: false } }] });
 await ensureSuperAdmin();
 startLeadIntegrationWorkers();

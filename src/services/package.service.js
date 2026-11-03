@@ -5,6 +5,7 @@ import { pick } from '../utils/pick.js';
 import { capFirst } from '../utils/text.js';
 import { objectId } from '../utils/validators.js';
 import { stockSummary } from './stock.service.js';
+import { catalogOwner } from '../utils/catalogOwner.js';
 
 const ALLOWED_FIELDS = ['name', 'kw', 'price', 'description', 'items'];
 
@@ -14,7 +15,7 @@ async function assertPackageItemsOwnedByCompany(company, items) {
   if (!ids.length) return;
   const owned = await Product.countDocuments({
     _id: { $in: ids.map((id) => objectId(id, 'Product')) },
-    company: company._id,
+    ...catalogOwner(company),
   });
   if (owned !== ids.length) {
     throw badRequest('Each package line must use a product from your company catalog only');
@@ -60,20 +61,23 @@ function inferItemType(type, categoryName) {
  * Aggregation pipeline that populates each package's items with full product details
  * (name, brand, model, watts, specs, itemType) via $lookup on products + categories.
  */
-function buildPackagePipeline(matchStage, sortStage = { $sort: { createdAt: -1 } }) {
+function buildPackagePipeline(company, matchStage, sortStage = { $sort: { createdAt: -1 } }) {
+  // packages are the branch's own; the products in them come from the organization's shared catalog
+  const owner = catalogOwner(company);
+  const [ownerField, ownerId] = Object.entries(owner)[0];
   return [
     matchStage,
     sortStage,
-    // ── Lookup products referenced in items (same company only) ───────────
+    // ── Lookup products referenced in items (from the shared catalog only) ───────────
     {
       $lookup: {
         from: 'products',
-        let: { itemIds: '$items.productId', pkgCompany: '$company' },
+        let: { itemIds: '$items.productId', owner: new mongoose.Types.ObjectId(String(ownerId)) },
         pipeline: [
           {
             $match: {
               $expr: {
-                $and: [{ $in: ['$_id', '$$itemIds'] }, { $eq: ['$company', '$$pkgCompany'] }],
+                $and: [{ $in: ['$_id', '$$itemIds'] }, { $eq: [`$${ownerField}`, '$$owner'] }],
               },
             },
           },
@@ -191,6 +195,7 @@ export const packageService = {
   list: async (company) => {
     const raw = await Package.aggregate(
       buildPackagePipeline(
+        company,
         { $match: { company: new mongoose.Types.ObjectId(company._id) } },
         { $sort: { createdAt: -1 } },
       ),
@@ -200,7 +205,7 @@ export const packageService = {
 
   get: async (company, id) => {
     const raw = await Package.aggregate(
-      buildPackagePipeline({
+      buildPackagePipeline(company, {
         $match: {
           _id: objectId(id, 'Package'),
           company: new mongoose.Types.ObjectId(company._id),

@@ -43,10 +43,12 @@ export async function userView(user) {
   if (user.role === ROLES.COMPANY || user.role === ROLES.BRANCH) {
     // the owner of a company without branches also edits the masters (there is no company admin above them)
     const org = user.role === ROLES.BRANCH && user.organization ? await Organization.findById(user.organization).select('hasBranches limits').lean() : null;
-    return { ...json, managesMasters: managesMasters(user, org) };
+    return { ...json, managesMasters: managesMasters(user, org), editsCatalog: user.role === ROLES.COMPANY || !orgHasBranches(org) };
   }
   if (user.role !== ROLES.AGENT) return json;
-  return { ...json, permissions: user.effectivePermissions ?? (await resolvePermissions(user)) };
+  // the product catalog is shared by the company's branches: with branches, only the company admin changes it
+  const org = user.organization ? await Organization.findById(user.organization).select('hasBranches').lean() : null;
+  return { ...json, permissions: user.effectivePermissions ?? (await resolvePermissions(user)), editsCatalog: !orgHasBranches(org) };
 }
 
 export async function organizationView(user, organization) {
@@ -128,6 +130,32 @@ export async function login({ email, password, ip, userAgent, replaceSessions = 
     company: await companyView(user, company),
     organization: await organizationView(user, organization),
     impersonated: false,
+  };
+}
+
+/** Super admin opens a tenant workspace as the company admin or a branch owner. */
+export async function impersonationSession(user, admin, { hintBranch } = {}) {
+  if (!user) throw notFound('User');
+  let company = hintBranch;
+  let organization = null;
+  if (TENANT_ROLES.includes(user.role)) {
+    if (user.role === ROLES.COMPANY) company = await resolveLoginBranch(user);
+    else if (!company) company = await Company.findById(user.company);
+    if (!company || company.status !== 'active') throw badRequest('Activate the company before signing in as it');
+    organization = await loadOrganizationForBranch(company);
+    if (organization?.status && organization.status !== 'active') throw forbidden('This company account is suspended.');
+    applyOrganizationMasters(company, organization);
+  }
+  const sid = newSessionId();
+  await registerSession({ user: admin, sessionId: sid, userAgent: 'impersonation', impersonation: true });
+  user.lastLoginAt = new Date();
+  await user.save();
+  return {
+    token: signToken(user, { by: admin.id, sid, branchId: company?._id }),
+    user: await userView(user),
+    company: await companyView(user, company),
+    organization: await organizationView(user, organization),
+    impersonated: true,
   };
 }
 

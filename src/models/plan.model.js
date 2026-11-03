@@ -10,6 +10,10 @@ const planSchema = new mongoose.Schema(
     kind: { type: String, enum: ['fixed', 'custom'], default: 'fixed' },
     priceMonthly: { type: Number, default: 0, min: 0 },
     maxConcurrentLogins: { type: Number, default: 1, min: 1 },
+    // company-wide caps: clients and designs are counted across ALL of a company's branches together
+    maxBranches: { type: Number, default: 1, min: 1 },
+    maxClients: { type: Number, default: 100, min: 1 },
+    maxDesigns: { type: Number, default: 200, min: 1 },
     features: { type: [{ type: String, trim: true, maxlength: 100 }], default: () => [] }, // what the plan includes, shown to companies
     selfServe: { type: Boolean, default: true },
     active: { type: Boolean, default: true },

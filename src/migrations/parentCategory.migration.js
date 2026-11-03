@@ -9,13 +9,16 @@ export function defaultParentOf(category) {
 
 /** Creates the default parent categories for one company and files its still-unfiled categories under them. */
 export async function seedParentCategories(companyId) {
+  // parent categories and categories are shared by the organization's branches (see catalogOwner)
+  const branch = await Company.findById(companyId).select('organization').setOptions({ rawBranch: true }).lean();
+  const owner = branch?.organization ? { organization: branch.organization } : { company: companyId };
   const parents = new Map();
   for (const [i, p] of DEFAULT_PARENT_CATEGORIES.entries()) {
-    const existing = await ParentCategory.findOne({ company: companyId, name: p.name }).collation({ locale: 'en', strength: 2 });
+    const existing = await ParentCategory.findOne({ ...owner, name: p.name }).collation({ locale: 'en', strength: 2 });
     parents.set(p.name, existing || (await ParentCategory.create({ company: companyId, name: p.name, description: p.description, position: i + 1 })));
   }
   let filed = 0;
-  for (const c of await Category.find({ company: companyId, parent: null })) {
+  for (const c of await Category.find({ ...owner, parent: null })) {
     const parent = parents.get(defaultParentOf(c));
     if (!parent) continue; // no obvious group: it stays as it is, under "Other items"
     await Category.updateOne({ _id: c._id }, { parent: parent._id });

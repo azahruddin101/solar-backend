@@ -13,6 +13,7 @@ import { deleteFile } from './storage.service.js';
 import { parsePagination, toApiJSON, toApiJSONList } from '../utils/lean.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
+import { catalogOwner } from '../utils/catalogOwner.js';
 
 export const PRICE_FIELD = { base: 'basePrice', wholesale: 'wholesalePrice', retail: 'retailPrice' };
 const UNIT_LABEL = { inStock: 'in stock', sold: 'sold', installed: 'installed', returned: 'returned' };
@@ -23,7 +24,7 @@ const BATCH_FIELDS = ['batchNo', 'mfgDate', 'mfgYear', 'receivedDate', 'purchase
 export const inTransaction = (fn) => mongoose.connection.transaction(fn);
 
 async function ownProduct(company, id, session = null) {
-  const product = await Product.findOne({ _id: objectId(id, 'Product'), company: company._id }).session(session);
+  const product = await Product.findOne({ _id: objectId(id, 'Product'), ...catalogOwner(company) }).session(session); // shared catalog; stock stays per branch
   if (!product) throw notFound('Product');
   return product;
 }
@@ -273,7 +274,7 @@ export async function setUnitStatus(company, unitId, body = {}) {
     if (unit.soldEwayBill) {
       // while its e-way bill is open the unit still belongs to it: cancelling must be able to put it back in stock
       const ewayBill = await EwayBill.findOne({ _id: unit.soldEwayBill, company: company._id }).select('ewayNo status').session(session).lean();
-      if (ewayBill?.status === 'open') throw conflict(`This unit is on e-way bill ${ewayBill.ewayNo}, which is still open. Bill it or cancel it first`);
+      if (ewayBill?.status === 'open') throw conflict(`This unit is on bill ${ewayBill.ewayNo}, which is still open. Invoice it or cancel it first`);
     }
     const set = { status: to };
     if (to === 'installed') {

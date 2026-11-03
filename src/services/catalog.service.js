@@ -9,9 +9,12 @@ import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js
 import { pick } from '../utils/pick.js';
 import { capFirst } from '../utils/text.js';
 import { objectId } from '../utils/validators.js';
+import { catalogOwner, catalogOwnerFields } from '../utils/catalogOwner.js';
 import { attributeKey, cleanAttributeDefs, textAttributes, validateAttributes } from './attribute.service.js';
 import { stockSummary } from './stock.service.js';
 import { deleteFile } from './storage.service.js';
+
+export { catalogOwner, catalogOwnerFields };
 
 const COMMON = ['name', 'brand', 'model', 'sku', 'hsnCode', 'gstPercent', 'warrantyMonths', 'reorderLevel', 'isSerialized', 'description'];
 const FIELDS = {
@@ -21,6 +24,7 @@ const FIELDS = {
 };
 
 const TYPED = ['watts', 'length', 'width', 'shape'];
+
 
 function productUnitsList(company) {
   const raw = company?.productUnits;
@@ -63,7 +67,7 @@ function applyProduct(product, category, body, company) {
 /* ───────────── categories ───────────── */
 
 async function getCategory(company, id) {
-  const category = await Category.findOne({ _id: objectId(id, 'Category'), company: company._id });
+  const category = await Category.findOne({ _id: objectId(id, 'Category'), ...catalogOwner(company) });
   if (!category) throw notFound('Category');
   return category;
 }
@@ -80,7 +84,7 @@ async function clearCategoryIcon(category) {
 }
 
 async function categoryWithProductCount(company, category) {
-  const n = await Product.countDocuments({ company: company._id, category: category._id });
+  const n = await Product.countDocuments({ ...catalogOwner(company), category: category._id });
   return { ...category.toJSON(), products: n };
 }
 
@@ -93,21 +97,21 @@ async function applyCategory(company, category, body) {
   const retyped = !category.isNew && category.isModified('type');
   const name = String(category.name ?? '').trim();
   if (!name) throw badRequest('Category name is required');
-  const twin = await Category.findOne({ company: company._id, _id: { $ne: category._id }, name }).collation({ locale: 'en', strength: 2 });
+  const twin = await Category.findOne({ ...catalogOwner(company), _id: { $ne: category._id }, name }).collation({ locale: 'en', strength: 2 });
   if (twin) throw conflict('You already have a category with that name');
   if (body?.parent !== undefined) category.parent = body.parent ? (await getParentCategory(company, body.parent))._id : null;
   // existing products keep their values when the definitions change (see validateAttributes)
   if (body?.attributes !== undefined) category.attributes = cleanAttributeDefs(body.attributes);
   await category.save();
   // the products follow their category; panels still missing a watt or size stay out of the designer until edited
-  if (retyped) await Product.updateMany({ company: company._id, category: category._id }, { type: category.type });
+  if (retyped) await Product.updateMany({ ...catalogOwner(company), category: category._id }, { type: category.type });
   return category;
 }
 
 /* ───────────── parent categories ───────────── */
 
 async function getParentCategory(company, id) {
-  const parent = await ParentCategory.findOne({ _id: objectId(id, 'Parent category'), company: company._id });
+  const parent = await ParentCategory.findOne({ _id: objectId(id, 'Parent category'), ...catalogOwner(company) });
   if (!parent) throw notFound('Parent category');
   return parent;
 }
@@ -116,7 +120,7 @@ async function applyParentCategory(company, parent, body) {
   Object.assign(parent, pick(body, ['name', 'description']));
   const name = String(parent.name ?? '').trim();
   if (!name) throw badRequest('Parent category name is required');
-  const twin = await ParentCategory.findOne({ company: company._id, _id: { $ne: parent._id }, name }).collation({ locale: 'en', strength: 2 });
+  const twin = await ParentCategory.findOne({ ...catalogOwner(company), _id: { $ne: parent._id }, name }).collation({ locale: 'en', strength: 2 });
   if (twin) throw conflict('You already have a parent category with that name');
   return parent.save();
 }
@@ -125,28 +129,28 @@ export const parentCategoryService = {
   /** In the company's own order; each with the number of categories filed under it. */
   list: async (company) => {
     const [parents, counts] = await Promise.all([
-      ParentCategory.find({ company: company._id }).sort({ position: 1, createdAt: 1, _id: 1 }),
-      Category.aggregate([{ $match: { company: company._id, parent: { $ne: null } } }, { $group: { _id: '$parent', n: { $sum: 1 } } }]),
+      ParentCategory.find({ ...catalogOwner(company) }).sort({ position: 1, createdAt: 1, _id: 1 }),
+      Category.aggregate([{ $match: { ...catalogOwner(company), parent: { $ne: null } } }, { $group: { _id: '$parent', n: { $sum: 1 } } }]),
     ]);
     const categories = new Map(counts.map((c) => [String(c._id), c.n]));
     return parents.map((p) => ({ ...p.toJSON(), categories: categories.get(p.id) || 0 }));
   },
   create: async (company, body) => {
-    if ((await ParentCategory.countDocuments({ company: company._id })) >= 20) throw badRequest('You can have up to 20 parent categories');
-    const last = await ParentCategory.findOne({ company: company._id }).sort({ position: -1 });
-    return { ...(await applyParentCategory(company, new ParentCategory({ company: company._id, position: (last?.position || 0) + 1 }), body)).toJSON(), categories: 0 };
+    if ((await ParentCategory.countDocuments({ ...catalogOwner(company) })) >= 20) throw badRequest('You can have up to 20 parent categories');
+    const last = await ParentCategory.findOne({ ...catalogOwner(company) }).sort({ position: -1 });
+    return { ...(await applyParentCategory(company, new ParentCategory({ ...catalogOwnerFields(company), position: (last?.position || 0) + 1 }), body)).toJSON(), categories: 0 };
   },
   update: async (company, id, body) => applyParentCategory(company, await getParentCategory(company, id), body),
   /** `ids` is the full list of the company's parent category ids in their new order. */
   reorder: async (company, ids) => {
     if (!Array.isArray(ids) || !ids.length) throw badRequest('Nothing to reorder');
-    await ParentCategory.bulkWrite(ids.map((id, i) => ({ updateOne: { filter: { _id: objectId(id, 'Parent category'), company: company._id }, update: { position: i + 1 } } })));
+    await ParentCategory.bulkWrite(ids.map((id, i) => ({ updateOne: { filter: { _id: objectId(id, 'Parent category'), ...catalogOwner(company) }, update: { position: i + 1 } } })));
     return parentCategoryService.list(company);
   },
   /** Deleting a parent category keeps its categories and their products: they only lose the grouping. */
   remove: async (company, id) => {
     const parent = await getParentCategory(company, id);
-    await Category.updateMany({ company: company._id, parent: parent._id }, { parent: null });
+    await Category.updateMany({ ...catalogOwner(company), parent: parent._id }, { parent: null });
     await parent.deleteOne();
   },
 };
@@ -155,33 +159,33 @@ export const categoryService = {
   /** In the company's own order (new ones last); each with its product count. */
   list: async (company) => {
     const [categories, counts] = await Promise.all([
-      Category.find({ company: company._id }).sort({ position: 1, createdAt: 1, _id: 1 }),
-      Product.aggregate([{ $match: { company: company._id } }, { $group: { _id: '$category', n: { $sum: 1 } } }]),
+      Category.find({ ...catalogOwner(company) }).sort({ position: 1, createdAt: 1, _id: 1 }),
+      Product.aggregate([{ $match: { ...catalogOwner(company) } }, { $group: { _id: '$category', n: { $sum: 1 } } }]),
     ]);
     const products = new Map(counts.map((c) => [String(c._id), c.n]));
     return categories.map((c) => ({ ...c.toJSON(), products: products.get(c.id) || 0 }));
   },
   create: async (company, body) => {
-    if ((await Category.countDocuments({ company: company._id })) >= 50) throw badRequest('You can have up to 50 categories');
-    const last = await Category.findOne({ company: company._id }).sort({ position: -1 });
-    return { ...(await applyCategory(company, new Category({ company: company._id, position: (last?.position || 0) + 1 }), body)).toJSON(), products: 0 };
+    if ((await Category.countDocuments({ ...catalogOwner(company) })) >= 50) throw badRequest('You can have up to 50 categories');
+    const last = await Category.findOne({ ...catalogOwner(company) }).sort({ position: -1 });
+    return { ...(await applyCategory(company, new Category({ ...catalogOwnerFields(company), position: (last?.position || 0) + 1 }), body)).toJSON(), products: 0 };
   },
   update: async (company, id, body) => applyCategory(company, await getCategory(company, id), body),
   /** `ids` is the full list of the company's category ids in their new order. */
   reorder: async (company, ids) => {
     if (!Array.isArray(ids) || !ids.length) throw badRequest('Nothing to reorder');
-    await Category.bulkWrite(ids.map((id, i) => ({ updateOne: { filter: { _id: objectId(id, 'Category'), company: company._id }, update: { position: i + 1 } } })));
+    await Category.bulkWrite(ids.map((id, i) => ({ updateOne: { filter: { _id: objectId(id, 'Category'), ...catalogOwner(company) }, update: { position: i + 1 } } })));
     return categoryService.list(company);
   },
   /** Deleting a category also deletes its products — unless one of them has stock history (batches). */
   remove: async (company, id) => {
     const category = await getCategory(company, id);
-    const products = await Product.find({ company: company._id, category: category._id }).select('documents');
-    if (await Batch.exists({ company: company._id, product: { $in: products.map((p) => p._id) } })) throw conflict('Products in this category have stock received. Move them to another category first');
-    await Product.deleteMany({ company: company._id, category: category._id });
+    const products = await Product.find({ ...catalogOwner(company), category: category._id }).select('documents');
+    if (await Batch.exists({ product: { $in: products.map((p) => p._id) } })) throw conflict('Products in this category have stock received. Move them to another category first');
+    await Product.deleteMany({ ...catalogOwner(company), category: category._id });
     await deleteProductFiles(products);
     await clearCategoryIcon(category);
-    await Supplier.updateMany({ company: company._id, categories: category._id }, { $pull: { categories: category._id } });
+    await Supplier.updateMany({ categories: category._id }, { $pull: { categories: category._id } });
     await category.deleteOne();
   },
   setIcon: async (company, id, file) => {
@@ -212,7 +216,7 @@ async function deleteProductFiles(products) {
 }
 
 async function getProduct(company, id) {
-  const product = await Product.findOne({ _id: objectId(id, 'Product'), company: company._id });
+  const product = await Product.findOne({ _id: objectId(id, 'Product'), ...catalogOwner(company) });
   if (!product) throw notFound('Product');
   return product;
 }
@@ -233,7 +237,7 @@ async function withStock(company, products) {
 }
 
 export const productService = {
-  list: async (company, { category } = {}) => withStock(company, await Product.find({ company: company._id, ...(category ? { category: objectId(category, 'Category') } : {}) }).sort({ name: 1 })),
+  list: async (company, { category } = {}) => withStock(company, await Product.find({ ...catalogOwner(company), ...(category ? { category: objectId(category, 'Category') } : {}) }).sort({ name: 1 })),
   get: async (company, id) => {
     const product = await getProduct(company, id);
     await product.populate('category');
@@ -241,7 +245,7 @@ export const productService = {
   },
   create: async (company, body) => {
     const category = await getCategory(company, body?.category);
-    return withStock(company, await applyProduct(new Product({ company: company._id }), category, body, company).save());
+    return withStock(company, await applyProduct(new Product(catalogOwnerFields(company)), category, body, company).save());
   },
   /** A product can move to any of the company's categories; it takes on that category's type. */
   update: async (company, id, body) => {
@@ -297,7 +301,7 @@ export async function importPanels(company, categoryId, items) {
   if (category.type !== 'panels') throw badRequest('Panels can only be imported into a solar panel category');
   if (!Array.isArray(items) || !items.length) throw badRequest('Nothing to import');
   const keyOf = (p) => `${p.brand}|${p.model || ''}|${Number(p.watts)}`.toLowerCase();
-  const byKey = new Map((await Product.find({ company: company._id, category: category._id, type: 'panels' })).map((p) => [keyOf(p), p]));
+  const byKey = new Map((await Product.find({ ...catalogOwner(company), category: category._id, type: 'panels' })).map((p) => [keyOf(p), p]));
   let added = 0;
   let updated = 0;
   for (const raw of items.slice(0, 1000)) {
@@ -308,7 +312,7 @@ export async function importPanels(company, categoryId, items) {
       await applyProduct(doc, category, item, company).save();
       updated++;
     } else {
-      const created = await applyProduct(new Product({ company: company._id }), category, { length: 1.9, width: 1.05, ...item }, company).save();
+      const created = await applyProduct(new Product(catalogOwnerFields(company)), category, { length: 1.9, width: 1.05, ...item }, company).save();
       byKey.set(keyOf(created), created);
       added++;
     }
@@ -320,10 +324,10 @@ export async function importPanels(company, categoryId, items) {
  * Packages are served separately from GET /api/packages. */
 export async function designerCatalog(company) {
   const [categories, products, parents, stock] = await Promise.all([
-    Category.find({ company: company._id }).sort({ position: 1, createdAt: 1 }),
-    Product.find({ company: company._id }).sort({ name: 1 }),
-    ParentCategory.find({ company: company._id }).sort({ position: 1, createdAt: 1, _id: 1 }),
-    stockSummary(company._id),
+    Category.find({ ...catalogOwner(company) }).sort({ position: 1, createdAt: 1 }),
+    Product.find({ ...catalogOwner(company) }).sort({ name: 1 }),
+    ParentCategory.find({ ...catalogOwner(company) }).sort({ position: 1, createdAt: 1, _id: 1 }),
+    stockSummary(company._id), // this branch's own stock
   ]);
   // the price a proposal quotes: the retail price of the batch FIFO sells next (see stockSummary)
   const priceOf = (p) => stock.get(p.id)?.price || 0;

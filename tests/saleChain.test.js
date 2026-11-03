@@ -54,7 +54,7 @@ const eway = (lines, extra = {}) => ewayBillService.create(company, user, { desi
 describe('e-way bills', () => {
   test('take the goods out of stock, price them from their batches and get a running number', async () => {
     const e = await eway([{ productId: cable.id, qty: 10, priceType: 'retail' }, { productId: panel.id, serials: ['P-1', 'P-2'], priceType: 'wholesale' }]);
-    assert.equal(e.ewayNo, 'EWB-0001');
+    assert.equal(e.ewayNo, 'BILL-0001');
     assert.equal(e.status, 'open');
     assert.equal(e.title, 'Patil bungalow');
     assert.equal(e.transport.vehicleNo, 'MH12AB1234');
@@ -66,7 +66,7 @@ describe('e-way bills', () => {
     assert.equal(unit.status, 'sold');
     assert.equal(String(unit.soldEwayBill), e.id);
     assert.equal(unit.soldInvoice, null);
-    assert.equal((await eway([{ productId: cable.id, qty: 1, priceType: 'retail' }])).ewayNo, 'EWB-0002');
+    assert.equal((await eway([{ productId: cable.id, qty: 1, priceType: 'retail' }])).ewayNo, 'BILL-0002');
   });
 
   test('every line must be a product from stock, and the proposal must be booked', async () => {
@@ -98,7 +98,7 @@ describe('e-way bills', () => {
 
     const kept = await eway([{ productId: cable.id, qty: 5, priceType: 'retail' }]);
     await billService.create(company, user, { design: design.id, ewayBills: [kept.id], payment: paid() });
-    await assert.rejects(ewayBillService.cancel(company, kept.id), /on a bill/);
+    await assert.rejects(ewayBillService.cancel(company, kept.id), /on an invoice/);
   });
 
   test('a client with no proposal can have e-way bills too', async () => {
@@ -136,9 +136,9 @@ describe('bills', () => {
       payment: paid({ receivedOn: '2026-10-20', note: 'Cash and UPI' }),
     });
     const { bill, payment } = res;
-    assert.equal(bill.billNo, 'BILL-0001');
+    assert.equal(bill.billNo, 'INV-0001');
     assert.equal(bill.status, 'paid');
-    assert.deepEqual(bill.pricing.lines.map((l) => [l.kind, l.name, l.ewayNo || '']), [['goods', 'DC cable', 'EWB-0001'], ['goods', 'Panel 540 Wp', 'EWB-0002'], ['service', 'Installation', ''], ['service', 'Transport', '']]);
+    assert.deepEqual(bill.pricing.lines.map((l) => [l.kind, l.name, l.ewayNo || '']), [['goods', 'DC cable', 'BILL-0001'], ['goods', 'Panel 540 Wp', 'BILL-0002'], ['service', 'Installation', ''], ['service', 'Transport', '']]);
     assert.equal(bill.services[0].name, 'Installation'); // copied from the charge
     assert.equal(bill.services[0].hsn, '998736'); // the charge's SAC
     assert.equal(bill.services[1].hsn, '996511'); // typed on the custom service
@@ -150,14 +150,14 @@ describe('bills', () => {
     assert.equal(bill.total, 17869.5);
     assert.equal(bill.paid.mode, 'upi');
     assert.equal(bill.paid.amount, 17869.5);
-    assert.deepEqual(bill.ewayBills.map((e) => e.ewayNo), ['EWB-0001', 'EWB-0002']);
+    assert.deepEqual(bill.ewayBills.map((e) => e.ewayNo), ['BILL-0001', 'BILL-0002']);
 
-    assert.equal(payment.receiptNo, 'BILL-0001'); // the bill is the payment document
+    assert.equal(payment.receiptNo, 'INV-0001'); // the bill is the payment document
     assert.equal(payment.amount, 17869.5);
     assert.equal(String(payment.bill), bill.id);
     assert.equal(payment.contractTotal, 200000);
     assert.equal(payment.balanceAfter, 200000 - 17869.5);
-    assert.match(payment.note, /Bill BILL-0001 · Cash and UPI/);
+    assert.match(payment.note, /Invoice INV-0001 · Cash and UPI/);
     assert.equal(new Date(payment.receivedOn).toISOString().slice(0, 10), '2026-10-20');
 
     for (const e of [e1, e2]) {
@@ -169,15 +169,15 @@ describe('bills', () => {
     assert.equal(ledger.paid, 17869.5);
     assert.equal(ledger.openEwayBills, 0);
     assert.equal(ledger.uninvoicedBills, 1);
-    assert.equal(ledger.bills[0].billNo, 'BILL-0001');
+    assert.equal(ledger.bills[0].billNo, 'INV-0001');
   });
 
   test('an e-way bill goes on one bill only; a bill needs something on it and a payment mode', async () => {
     const e = await eway([{ productId: cable.id, qty: 1, priceType: 'retail' }]);
     await billService.create(company, user, { design: design.id, ewayBills: [e.id], payment: paid() });
-    await assert.rejects(billService.create(company, user, { design: design.id, ewayBills: [e.id], payment: paid() }), /already on a bill/);
-    await assert.rejects(billService.create(company, user, { design: design.id, ewayBills: [], services: [], payment: paid() }), /at least one e-way bill/);
-    await assert.rejects(billService.create(company, user, { design: design.id, services: [{ name: 'Visit', rate: 500 }], payment: {} }), /how the bill was paid/);
+    await assert.rejects(billService.create(company, user, { design: design.id, ewayBills: [e.id], payment: paid() }), /already on an invoice/);
+    await assert.rejects(billService.create(company, user, { design: design.id, ewayBills: [], services: [], payment: paid() }), /at least one bill/);
+    await assert.rejects(billService.create(company, user, { design: design.id, services: [{ name: 'Visit', rate: 500 }], payment: {} }), /how the invoice was paid/);
     assert.equal(await Bill.countDocuments(), 1);
     assert.equal(await Payment.countDocuments(), 1);
   });
@@ -204,9 +204,9 @@ describe('invoices from bills', () => {
     assert.equal(inv.pricing.fromBills, true);
     assert.equal(inv.pricing.discountAmount, 100);
     assert.equal(inv.pricing.gstTotal, 162 + 2400 + 900);
-    assert.deepEqual(inv.pricing.lines.map((l) => [l.name, l.billNo]), [['DC cable', 'BILL-0001'], ['Panel 540 Wp', 'BILL-0002'], ['Installation', 'BILL-0002']]);
+    assert.deepEqual(inv.pricing.lines.map((l) => [l.name, l.billNo]), [['DC cable', 'INV-0001'], ['Panel 540 Wp', 'INV-0002'], ['Installation', 'INV-0002']]);
     assert.deepEqual(inv.pricing.taxByHsn.map((r) => [r.hsn, r.taxable, r.gst]), [['8544', 900, 162], ['8541', 20000, 2400], ['—', 5000, 900]]); // a service with no SAC
-    assert.deepEqual(inv.billRefs.map((r) => [r.billNo, r.total, r.ewayNos]), [['BILL-0001', b1.total, ['EWB-0001']], ['BILL-0002', b2.total, ['EWB-0002']]]);
+    assert.deepEqual(inv.billRefs.map((r) => [r.billNo, r.total, r.ewayNos]), [['INV-0001', b1.total, ['BILL-0001']], ['INV-0002', b2.total, ['BILL-0002']]]);
     assert.equal(inv.billToCompany, 'Patil Industries');
     assert.equal(inv.details.destination, 'Nashik');
     assert.equal(String(inv.client), client.id);
@@ -313,11 +313,11 @@ describe('repeating a create request with the same key', () => {
     const first = await eway(lines, { idempotencyKey: 'key-eway-0001' });
     const again = await eway(lines, { idempotencyKey: 'key-eway-0001' });
     assert.equal(again.id, first.id);
-    assert.equal(again.ewayNo, 'EWB-0001');
+    assert.equal(again.ewayNo, 'BILL-0001');
     assert.equal(await EwayBill.countDocuments(), 1);
     assert.equal((await Batch.findOne({ product: cable._id })).qtyRemaining, 90);
     const other = await eway(lines, { idempotencyKey: 'key-eway-0002' }); // a different key is a different sale
-    assert.equal(other.ewayNo, 'EWB-0002');
+    assert.equal(other.ewayNo, 'BILL-0002');
     assert.equal((await Batch.findOne({ product: cable._id })).qtyRemaining, 80);
     await eway(lines); // no key: no protection, as before
     assert.equal(await EwayBill.countDocuments(), 3);
@@ -339,7 +339,7 @@ describe('repeating a create request with the same key', () => {
     const again = await billService.create(company, user, body); // would fail as "already on a bill" without the key
     assert.equal(again.bill.id, first.bill.id);
     assert.equal(again.payment.id, first.payment.id);
-    assert.deepEqual(again.bill.ewayBills.map((x) => x.ewayNo), ['EWB-0001']);
+    assert.deepEqual(again.bill.ewayBills.map((x) => x.ewayNo), ['BILL-0001']);
     assert.equal(await Bill.countDocuments(), 1);
     assert.equal(await Payment.countDocuments(), 1);
 
@@ -387,7 +387,7 @@ describe('voiding a bill or an invoice', () => {
     assert.deepEqual(await billService.uninvoiced(company, { design: design.id }), []); // a void bill can't be invoiced
     // the e-way bill can be billed again, and the new bill gets a new number
     const again = await billService.create(company, user, { design: design.id, ewayBills: [e.id], payment: paid() });
-    assert.equal(again.bill.billNo, 'BILL-0002');
+    assert.equal(again.bill.billNo, 'INV-0002');
   });
 
   test('voiding a bill with "return stock" cancels its e-way bills and puts the goods back', async () => {
@@ -395,7 +395,7 @@ describe('voiding a bill or an invoice', () => {
     await billService.void(company, user, bill.id, { reason: 'Customer returned everything', returnStock: true });
     const cancelled = await EwayBill.findById(e.id);
     assert.equal(cancelled.status, 'cancelled');
-    assert.match(cancelled.cancelReason, /BILL-0001 voided: Customer returned everything/);
+    assert.match(cancelled.cancelReason, /INV-0001 voided: Customer returned everything/);
     assert.equal((await Batch.findOne({ product: cable._id })).qtyRemaining, 100);
     assert.equal((await SerialUnit.findOne({ serialNo: 'P-1' })).status, 'inStock');
     assert.equal(await Payment.countDocuments(), 0);
@@ -413,7 +413,7 @@ describe('voiding a bill or an invoice', () => {
   test('a bill on an invoice can only be voided after the invoice is; voiding the invoice frees its bills', async () => {
     const { bill } = await billOf([{ productId: panel.id, serials: ['P-2'], priceType: 'retail' }]);
     const { createdInvoice } = await billingService.createInvoiceFromBills(company, user, { design: design.id });
-    await assert.rejects(billService.void(company, user, bill.id, { reason: 'x' }), /Void that invoice first/);
+    await assert.rejects(billService.void(company, user, bill.id, { reason: 'x' }), /Void that one first/);
     assert.equal((await SerialUnit.findOne({ serialNo: 'P-2' })).soldInvoice?.toString(), createdInvoice.id);
 
     await assert.rejects(billingService.voidInvoice(company, user, createdInvoice.id, {}), /reason/);
@@ -495,7 +495,7 @@ describe('credit notes: only some of the goods on a paid bill come back', () => 
     assert.equal((await SerialUnit.findOne({ serialNo: 'P-1' })).status, 'inStock');
     assert.equal((await SerialUnit.findOne({ serialNo: 'P-2' })).status, 'sold');
     assert.equal((await Batch.findOne({ product: panel._id })).qtyRemaining, 2); // 3 received − 2 sold + 1 back
-    await assert.rejects(creditNoteService.create(company, user, bill.id, { lines: [{ line: 1, serials: ['P-1'] }], reason: 'again', refund: refund() }), /not on this bill or already returned/);
+    await assert.rejects(creditNoteService.create(company, user, bill.id, { lines: [{ line: 1, serials: ['P-1'] }], reason: 'again', refund: refund() }), /not on this invoice or already returned/);
     await assert.rejects(creditNoteService.create(company, user, bill.id, { lines: [{ line: 1, serials: [] }], reason: 'x', refund: refund() }), /Choose the serial numbers/);
 
     await SerialUnit.updateOne({ serialNo: 'P-2' }, { $set: { status: 'installed' } });
