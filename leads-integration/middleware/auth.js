@@ -9,7 +9,7 @@ const protect = (req, res, next) => {
 
 /** Company owners manage their own lead integrations (one Meta / Google setup per company). */
 const authorize = (...roles) => (req, res, next) => {
-  const allowed = roles.length ? roles : ['company'];
+  const allowed = roles.length ? roles : ['branch', 'company'];
   if (allowed.includes(req.user?.role)) return next();
   return res.status(403).json({ message: 'Forbidden' });
 };

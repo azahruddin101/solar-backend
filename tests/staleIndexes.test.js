@@ -69,7 +69,9 @@ test('the migration drops exactly the stale indexes; every company then gets its
   assert.deepEqual(await statusNames(b.company), ['Callback', 'Converted', 'Interested', 'Lost', 'New', 'Site visit']);
   // a name is still unique within one company
   await leads.as(b.user, b.company);
-  assert.equal((await leads.call('POST', '/api/company/integrations/meta/lead-statuses', { name: 'Callback' })).status === 201, false);
+  const dup = await leads.call('POST', '/api/company/integrations/meta/lead-statuses', { name: 'Callback' });
+  assert.equal(dup.status, 400);
+  assert.match(dup.body.message, /already exists/);
 
   // two companies can both connect Meta
   await MetaIntegration.create({ company: a.company._id });
@@ -86,4 +88,17 @@ test('owners see switched-off statuses (to turn them back on); staff only the ac
   assert.equal((await leads.call('GET', '/api/leads/statuses')).body.length, 6);
   await leads.as(staff, company);
   assert.equal((await leads.call('GET', '/api/leads/statuses')).body.length, 5);
+});
+
+test('company owners (role branch) manage lead statuses and integrations; staff cannot', async () => {
+  await dropStaleIndexes();
+  const { company, user } = await owner('Solar');
+  const staff = await mkUser(company, { role: 'agent', permissions: ['leads:view', 'leads:change_status'] });
+  await leads.as(user, company);
+  const created = await leads.call('POST', '/api/company/integrations/meta/lead-statuses', { name: 'Follow up' });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal((await leads.call('GET', '/api/company/integrations/meta/lead-statuses')).status, 200);
+  assert.notEqual((await leads.call('GET', '/api/company/integrations/sheet')).status, 403);
+  await leads.as(staff, company);
+  assert.equal((await leads.call('POST', '/api/company/integrations/meta/lead-statuses', { name: 'Mine' })).status, 403);
 });

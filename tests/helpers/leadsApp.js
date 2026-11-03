@@ -14,6 +14,7 @@ export const MetaLeadAssignment = require('../../leads-integration/models/MetaLe
 /** Starts the app; returns { call, as, stop }. `as(user, company)` signs in the next calls as that user. */
 export async function startLeadsApp() {
   const { default: router } = await import('../../src/routes/leads.routes.js');
+  const { metaRoutes, sheetRoutes, googleLeadRoutes } = await import('../../src/integrations/leads.js');
   let current = null;
   const app = express();
   app.use(express.json());
@@ -23,6 +24,10 @@ export async function startLeadsApp() {
     next();
   });
   app.use('/api/leads', router);
+  // the owner-only lead integrations (statuses, Meta, Sheet, Google Ads), as src/routes/company.routes.js mounts them
+  app.use('/api/company/integrations/meta', metaRoutes);
+  app.use('/api/company/integrations/sheet', sheetRoutes);
+  app.use('/api/company/google-leads', googleLeadRoutes);
   app.use((err, req, res, next) => res.status(err.status || err.statusCode || 500).json({ error: err.message })); // eslint-disable-line no-unused-vars
   const server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;

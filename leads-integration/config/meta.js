@@ -26,8 +26,9 @@ const META_OAUTH_SCOPES = [
   'pages_manage_metadata', // subscribe the Page to leadgen webhooks
 ];
 
-// CRM roles allowed to manage the Meta integration and view Meta leads
-const META_ALLOWED_ROLES = ['company'];
+// CRM roles allowed to manage the lead integrations, statuses and assignment: the company owner (role branch) and
+// the company admin working in a branch (role company). Owners were role company before organizations existed.
+const META_ALLOWED_ROLES = ['branch', 'company'];
 const { getLeadCompanyId } = require('../utils/tenant');
 
 // Per-company Meta app settings (decrypted), refreshed before each API call.

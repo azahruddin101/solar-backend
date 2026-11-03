@@ -65,7 +65,7 @@ async function leadSearchCondition({ companyId, search, kind }) {
   if (kind === 'meta') or.push({ formName: rx }, { pageName: rx });
 
   const [users, statuses] = await Promise.all([
-    mongoose.model('User').find({ ...tenant, role: { $in: ['company', 'agent'] }, name: rx }).select('_id').limit(100).lean(),
+    mongoose.model('User').find({ ...tenant, role: { $in: ['branch', 'company', 'agent'] }, name: rx }).select('_id').limit(100).lean(),
     MetaLeadStatus.find({ ...tenant, isDeleted: { $ne: true }, name: rx }).select('_id').lean(),
   ]);
   if (users.length) or.push({ assignedTo: { $in: users.map((u) => u._id) } });
