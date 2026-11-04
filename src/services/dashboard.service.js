@@ -1,7 +1,7 @@
 // The company dashboard: sales pipeline, money collected and what needs attention — one company-scoped read.
 import { DEFAULT_PRODUCT_UNITS, DESIGN_STATUS, OPEN_DESIGN_STATUS, ROLES } from '../constants/index.js';
 import { catalogOwner } from '../utils/catalogOwner.js';
-import { Batch, Bill, Category, Client, ClientTicket, Design, EwayBill, Expense, InstallationCharge, Invoice, Loan, Subsidy, Package, Payment, Product, Project, SerialUnit, Supplier, Ticket, User } from '../models/index.js';
+import { Batch, Bill, Category, Client, ClientTicket, Design, EwayBill, Estimate, Expense, InstallationCharge, Invoice, Loan, Subsidy, Package, Payment, Product, Project, SerialUnit, Supplier, Ticket, User } from '../models/index.js';
 import { warrantyEndDate } from '../models/serialUnit.model.js';
 import { totalOf } from './billing.service.js';
 import { agentRolesList } from './company.service.js';
@@ -423,9 +423,10 @@ const openPlatformTickets = (company) => Ticket.countDocuments({ company: compan
 
 export async function counts(company) {
   const filter = { company: company._id };
-  const [clients, designs, packages, installations, team, installationCharges, products, categories, billing, metaLeads, googleLeads, manualLeads, amc, clientSupport, loans, subsidies, expenses, suppliers, support] = await Promise.all([
+  const [clients, designs, estimates, packages, installations, team, installationCharges, products, categories, billing, metaLeads, googleLeads, manualLeads, amc, clientSupport, loans, subsidies, expenses, suppliers, support] = await Promise.all([
     Client.countDocuments(filter),
     Design.countDocuments(filter),
+    Estimate.countDocuments(filter),
     Package.countDocuments(filter),
     Project.countDocuments({ ...filter, status: 'active' }),
     User.countDocuments({ ...filter, role: ROLES.AGENT }),
@@ -453,6 +454,7 @@ export async function counts(company) {
     suppliers,
     support, // the company's open tickets with the platform team
     designs,
+    estimates, // saved estimates (Dashboard → Estimation)
     billing, // e-way bills waiting for a bill, and bills waiting for an invoice
     packages,
     installations,
@@ -504,6 +506,7 @@ export async function staffCounts(user, company) {
   }
   if (may('clients')) jobs.clients = () => Client.countDocuments(filter);
   if (may('proposals')) jobs.designs = () => Design.countDocuments(filter);
+  if (may('proposals')) jobs.estimates = () => Estimate.countDocuments(filter);
   if (may('loans')) jobs.loans = () => Loan.countDocuments({ ...filter, status: 'in_progress' });
   if (may('subsidies')) jobs.subsidies = () => Subsidy.countDocuments({ ...filter, status: 'in_progress' });
   if (may('expenses')) jobs.expenses = () => expenseProjectCount(company);
