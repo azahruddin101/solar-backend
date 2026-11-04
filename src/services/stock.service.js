@@ -228,7 +228,48 @@ export async function allocateInvoiceLines(company, lines, { invoiceId = null, e
 }
 
 /**
- * Put the stock of a cancelled e-way bill back: each line's quantity returns to the batch it came from, and its
+ * Put part of one line's stock back (open product bill only). Non-serialized: `qty` units to the batch.
+ * Serialized: listed serials that are still sold on this e-way bill.
+ */
+export async function returnStockPartial(company, line, { qty, serials = [] }, ewayBillId, session) {
+  if (!session) throw new Error('returnStockPartial must run inside a transaction');
+  if (!line?.productId || !line.batch) throw badRequest('Invalid product line');
+  const batchId = objectId(line.batch, 'Batch');
+  const serialList = Array.isArray(serials) ? serials.map(String) : [];
+  if (serialList.length) {
+    const restored = await SerialUnit.updateMany(
+      { company: company._id, soldEwayBill: ewayBillId, serialNo: { $in: serialList }, status: 'sold' },
+      { $set: { status: 'inStock', soldEwayBill: null, soldInvoice: null } },
+      { session },
+    );
+    if (restored.modifiedCount !== serialList.length) throw conflict('Some serial numbers are not on this bill or were already returned');
+    if (restored.modifiedCount > 0) await Batch.updateOne({ _id: batchId, company: company._id }, { $inc: { qtyRemaining: restored.modifiedCount } }, { session });
+    return restored.modifiedCount;
+  }
+  const n = Number(qty);
+  if (!(n > 0)) throw badRequest('Enter how many came back');
+  const onBill = Number(line.qty) || 0;
+  if (n - onBill > 0.0005) throw badRequest(`Only ${onBill} can be returned on this line`);
+  await Batch.updateOne({ _id: batchId, company: company._id }, { $inc: { qtyRemaining: n } }, { session });
+  return n;
+}
+
+/** Move sold serial units from one open product bill to another (no batch change). */
+export async function reassignSoldSerials(company, lines, fromEwayId, toEwayId, session) {
+  if (!session) throw new Error('reassignSoldSerials must run inside a transaction');
+  for (const line of lines || []) {
+    const serials = Array.isArray(line.serials) ? line.serials : [];
+    if (!serials.length) continue;
+    const moved = await SerialUnit.updateMany(
+      { company: company._id, soldEwayBill: fromEwayId, serialNo: { $in: serials }, status: 'sold' },
+      { $set: { soldEwayBill: toEwayId } },
+      { session },
+    );
+    if (moved.modifiedCount !== serials.length) throw conflict('Some units are no longer on this bill. Refresh and try again');
+  }
+}
+
+/**
  * serial units (still `sold` on this e-way bill) go back in stock, counted one by one. Runs inside the cancelling transaction.
  */
 export async function returnStock(company, lines, { ewayBillId, session }) {

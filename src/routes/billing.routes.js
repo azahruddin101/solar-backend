@@ -6,8 +6,8 @@ import { validate } from '../middlewares/validate.middleware.js';
 import * as S from '../validation/schemas.js';
 import { billingService as svc } from '../services/billing.service.js';
 import { billService } from '../services/bill.service.js';
-import { creditNoteService, returnableOf } from '../services/creditNote.service.js';
-import { ewayBillService } from '../services/ewayBill.service.js';
+import { creditNoteService } from '../services/creditNote.service.js';
+import { ewayBillService, returnableEwayOf } from '../services/ewayBill.service.js';
 import { wrap } from '../utils/wrap.js';
 
 const router = Router();
@@ -35,14 +35,15 @@ router.get('/eway-bills/open', view, wrap((req) => ewayBillService.open(req.comp
 router.get('/eway-bills/:id', view, wrap((req) => ewayBillService.get(req.company, req.params.id)));
 router.post('/eway-bills', ewayBill, validate(S.ewayBillCreateSchema), wrap((req) => ewayBillService.create(req.company, req.user, req.body), 201));
 router.post('/eway-bills/:id/cancel', ewayBill, validate(S.ewayBillCancelSchema), wrap((req) => ewayBillService.cancel(req.company, req.params.id, req.body)));
+router.get('/eway-bills/:id/returnable', view, wrap((req) => returnableEwayOf(req.company, req.params.id)));
+router.post('/eway-bills/:id/revise', ewayBill, validate(S.ewayBillReviseSchema), wrap((req) => ewayBillService.revise(req.company, req.user, req.params.id, req.body)));
 router.post('/eway-bills/:id/pdf', ewayBill, uploadEwayBillPdf, wrap((req) => ewayBillService.attachPdf(req.company, req.params.id, req.file?.filename), 201));
 router.get('/bills', view, wrap((req) => billService.list(req.company, { page: req.query.page, limit: req.query.limit, status: req.query.status, ...dates(req) })));
 router.get('/bills/uninvoiced', view, wrap((req) => billService.uninvoiced(req.company, party(req))));
 router.get('/bills/:id', view, wrap((req) => billService.get(req.company, req.params.id)));
 router.post('/bills', bill, validate(S.billCreateSchema), wrap((req) => billService.create(req.company, req.user, req.body), 201));
 router.post('/bills/:id/pdf', bill, uploadBillPdf, wrap((req) => billService.attachPdf(req.company, req.params.id, req.file?.filename), 201));
-// goods back on a paid bill: a credit note, the owner's alone like voiding (it takes money off the books and puts goods back)
-router.get('/bills/:id/returnable', view, wrap((req) => returnableOf(req.company, req.params.id)));
+// goods back on a paid bill is disabled — returns happen on open bills; void the invoice instead (owner only, like voiding)
 router.post('/bills/:id/credit-notes', ownerOnly, validate(S.creditNoteCreateSchema), wrap((req) => creditNoteService.create(req.company, req.user, req.params.id, req.body), 201));
 router.get('/credit-notes', view, wrap((req) => creditNoteService.list(req.company, { page: req.query.page, limit: req.query.limit, ...dates(req) })));
 router.get('/credit-notes/:id', view, wrap((req) => creditNoteService.get(req.company, req.params.id)));

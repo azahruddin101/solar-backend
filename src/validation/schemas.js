@@ -466,10 +466,25 @@ const ewayLineSchema = obj({
   detail: f.textOptional(600, 'Detail'),
 });
 
+const billServiceSchema = obj({
+  chargeId: f.objectIdOrBlank,
+  name: f.textOptional(160, 'Service name'),
+  description: f.textOptional(300, 'Description'),
+  hsn: f.textOptional(8, 'SAC code'),
+  qty: f.numOptional({ min: 0, max: 1e6, label: 'Quantity' }),
+  unit: f.textOptional(20, 'Unit'),
+  rate: f.num({ min: 0, max: 1e10, label: 'Price' }),
+  gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
+});
+
 export const ewayBillCreateSchema = obj({
   ...chainParty,
-  lines: z.array(ewayLineSchema).min(1, 'Add at least one product from stock').max(100, 'Up to 100 lines'),
+  lines: z.array(ewayLineSchema).max(100, 'Up to 100 lines').optional(),
+  services: z.array(billServiceSchema).max(50, 'Up to 50 services on a bill').optional(),
   withGst: z.boolean().optional(),
+  discount: f.numOptional({ min: 0, max: 1e10, label: 'Discount' }),
+  discountIsPercent: z.boolean().optional(),
+  discountRemark: f.textOptional(200, 'Discount remark'),
   govtEwayNo: f.textOptional(20, 'E-way bill number'),
   issuedOn: z.string().optional(),
   note: f.textOptional(300, 'Note'),
@@ -489,15 +504,15 @@ export const ewayBillCreateSchema = obj({
 
 export const ewayBillCancelSchema = obj({ reason: f.textOptional(300, 'Reason') });
 
-const billServiceSchema = obj({
-  chargeId: f.objectIdOrBlank,
-  name: f.textOptional(160, 'Service name'),
-  description: f.textOptional(300, 'Description'),
-  hsn: f.textOptional(8, 'SAC code'),
-  qty: f.numOptional({ min: 0, max: 1e6, label: 'Quantity' }),
-  unit: f.textOptional(20, 'Unit'),
-  rate: f.num({ min: 0, max: 1e10, label: 'Price' }),
-  gstPercent: f.numOptional({ min: 0, max: 100, label: 'GST %' }),
+/** Partial return on an open product bill: stock back, old bill superseded, new bill with what is left. */
+export const ewayBillReviseSchema = obj({
+  lines: z.array(obj({
+    line: z.number().int().min(0).max(1000),
+    qty: f.numOptional({ min: 0, max: 1e6, label: 'Quantity' }),
+    serials: strArray(2000, 80).optional(),
+  })).min(1, 'Choose at least one product to return').max(100, 'Up to 100 lines'),
+  reason: f.textRequired(300, 'Reason'),
+  issuedOn: z.string().optional(),
 });
 
 export const billCreateSchema = obj({

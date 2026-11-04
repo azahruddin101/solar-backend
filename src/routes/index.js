@@ -27,6 +27,7 @@ import dashboardRoutes from './dashboard.routes.js';
 import billingRoutes from './billing.routes.js';
 import { stockRoutes, supplierRoutes } from './stock.routes.js';
 import installationChargeRoutes from './installationCharge.routes.js';
+import estimateRoutes from './estimate.routes.js';
 import { solarRoutes, staticMapRoutes } from './google.routes.js';
 import { staffCounts } from '../services/dashboard.service.js';
 import { wrap } from '../utils/wrap.js';
@@ -55,6 +56,7 @@ router.use('/billing', withAreaAccess('finances'), billingRoutes);
 router.use('/stock', withAreaAccess('inventory', 'finances', 'tasks'), stockRoutes); // batches and serial units; writes need 'inventory'
 router.use('/suppliers', withAreaAccess('inventory', 'finances', 'tasks'), supplierRoutes);
 router.use('/dashboard', companyOnly, dashboardRoutes);
+router.use('/estimates', withAreaAccess('proposals'), estimateRoutes); // saved estimates (Dashboard → Estimation): standalone quick quotes
 router.use('/installation-charges', withAreaAccess('proposals', 'inventory'), installationChargeRoutes);
 router.use('/catalog', withAreaAccess('proposals', 'inventory'), catalogRoutes); // the designer's own read-only aggregated catalog, also used by the catalog management page
 

@@ -27,7 +27,7 @@ const totalOf = (design) => money(design?.summary?.pricing?.total ?? design?.sum
  * Service lines from the form. One picked from the company's installation charges copies its name and SAC; the price,
  * GST and quantity are whatever was typed. A service without a SAC prints none (the column shows a dash). Returns the stored services and the pricing lines they become.
  */
-async function cleanServices(company, input, session) {
+export async function cleanServices(company, input, session) {
   const list = Array.isArray(input) ? input : [];
   if (list.length > 50) throw badRequest('Up to 50 services on an invoice');
   const ids = list.map((s) => s?.chargeId).filter((id) => /^[0-9a-f]{24}$/i.test(String(id || '')));
@@ -59,8 +59,13 @@ async function cleanServices(company, input, session) {
   return services;
 }
 
-const serviceLine = (s) => ({ kind: 'service', name: s.name, detail: s.description, hsn: s.hsn, qty: s.qty, unit: s.unit, rate: s.rate, gstPercent: s.gstPercent });
-const goodsLines = (ewayBill) => (ewayBill.pricing?.lines || ewayBill.lines || []).map((l) => ({ ...l, kind: 'goods', ewayBillId: String(ewayBill._id), ewayNo: ewayBill.ewayNo }));
+export const serviceLine = (s) => ({ kind: 'service', name: s.name, detail: s.description, hsn: s.hsn, qty: s.qty, unit: s.unit, rate: s.rate, gstPercent: s.gstPercent });
+const ewayPricingLines = (ewayBill) => (ewayBill.pricing?.lines || ewayBill.lines || []).map((l) => ({
+  ...l,
+  kind: l.kind === 'service' ? 'service' : 'goods',
+  ewayBillId: String(ewayBill._id),
+  ewayNo: ewayBill.ewayNo,
+}));
 
 const summary = (row) => toApiJSON(row);
 
@@ -108,7 +113,7 @@ export const billService = {
    */
   async create(company, user, body = {}) {
     const wantIds = [...new Set((Array.isArray(body.ewayBills) ? body.ewayBills : []).map((id) => String(id)))];
-    const withGst = body.withGst !== false;
+    const withGst = true;
     const payment = body.payment && typeof body.payment === 'object' ? body.payment : {};
     if (!PAYMENT_MODES.includes(payment.mode)) throw badRequest('Choose how the invoice was paid');
     const receivedOn = payment.receivedOn ? new Date(payment.receivedOn) : new Date();
@@ -140,7 +145,7 @@ export const billService = {
       const notOpen = ewayBills.filter((e) => e.status !== 'open');
       if (notOpen.length) throw conflict(`${notOpen.map((e) => e.ewayNo).join(', ')} ${notOpen.length === 1 ? 'is' : 'are'} already on an invoice or cancelled`);
 
-      const lines = [...ewayBills.flatMap(goodsLines), ...services.map(serviceLine)];
+      const lines = [...ewayBills.flatMap(ewayPricingLines), ...services.map(serviceLine)];
       const pricing = authorityInvoicePricing({
         lines,
         gstIncluded: false,

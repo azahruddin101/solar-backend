@@ -3,7 +3,7 @@
 // off the payment of the bill, so every ledger and dashboard drops it at once. The bill and its invoice stay as issued.
 import mongoose from 'mongoose';
 import { PAYMENT_MODES } from '../constants/index.js';
-import { Bill, CreditNote, Payment, SerialUnit } from '../models/index.js';
+import { Bill, CreditNote, EwayBill, Payment, SerialUnit } from '../models/index.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { cleanIdempotencyKey, createOnce } from '../utils/idempotency.js';
 import { parsePagination, toApiJSON } from '../utils/lean.js';
@@ -41,6 +41,35 @@ function goodsOf(bill, notes) {
       const serialsLeft = (line.serials || []).map(String).filter((s) => !t?.serials.has(s));
       return { index, line, taken: t || null, qtyLeft: round2(n(line.qty) - n(t?.qty)), serialsLeft };
     });
+}
+
+/** Every returnable goods line on the bill has been fully credited back. */
+export function allGoodsReturned(bill, notes) {
+  const rows = goodsOf(bill, notes);
+  if (!rows.length) return false;
+  return rows.every((g) => g.qtyLeft <= EPS);
+}
+
+/** Void a paid invoice when every product line has been returned; stock is already back from credit notes. */
+async function voidBillAfterFullReturn(company, user, bill, reason, session) {
+  if (bill.status !== 'paid' || bill.invoice) return null;
+  const notes = await CreditNote.find({ company: company._id, bill: bill._id }).select('lines').session(session).lean();
+  if (!allGoodsReturned(bill, notes)) return null;
+  const voidReason = `All goods returned: ${String(reason || '').trim()}`.slice(0, 300);
+  if (bill.payment) await Payment.deleteOne({ _id: bill.payment, company: company._id }, { session });
+  const ewayBills = await EwayBill.find({ _id: { $in: bill.ewayBills || [] }, company: company._id, bill: bill._id, status: 'billed' }).session(session);
+  for (const e of ewayBills) {
+    await EwayBill.updateOne(
+      { _id: e._id },
+      { $set: { status: 'cancelled', bill: null, cancelledAt: new Date(), cancelReason: `Invoice ${bill.billNo} voided — all goods returned`.slice(0, 300) } },
+      { session },
+    );
+  }
+  return Bill.findOneAndUpdate(
+    { _id: bill._id, status: 'paid' },
+    { $set: { status: 'void', payment: null, voidedAt: new Date(), voidReason, voidedByName: user?.name || user?.email || '' } },
+    { session, returnDocument: 'after' },
+  ).lean();
 }
 
 /** What the credit note form shows: each returnable line of the bill and how much of it is left to return. */
@@ -162,6 +191,7 @@ export const creditNoteService = {
    * stock, the refund comes off the bill's payment and the credit note is numbered and stored.
    */
   async create(company, user, billId, body = {}) {
+    throw badRequest('Returns are handled on open product bills before invoicing. To undo a paid invoice, void it instead.');
     const reason = String(body.reason || '').trim().slice(0, 300);
     if (!reason) throw badRequest('Give the reason the goods came back');
     const refund = body.refund && typeof body.refund === 'object' ? body.refund : {};
@@ -253,7 +283,10 @@ export const creditNoteService = {
         createdByName: user?.name || user?.email || '',
         idempotencyKey: idempotencyKey || undefined,
       }], { session });
-      return summary(created.toObject());
+      const voided = await voidBillAfterFullReturn(company, user, { ...bill, creditedTotal: round2(n(bill.creditedTotal) + total), payment }, reason, session);
+      const row = summary(created.toObject());
+      if (voided) row.invoiceVoided = true;
+      return row;
     }), summary);
   },
 

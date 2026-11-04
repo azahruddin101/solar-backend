@@ -53,6 +53,7 @@ function normalizeLine(l) {
     gstPercent: l.gstPercent != null && l.gstPercent !== ''
       ? Math.max(0, Math.min(100, n(l.gstPercent)))
       : undefined,
+    ...(l.gstIncluded != null ? { gstIncluded: l.gstIncluded !== false } : {}),
   };
 }
 
@@ -71,12 +72,13 @@ export function summarizeLinePricing({ lines = [], gstIncluded = true, discount 
     const lineGross = round2(l.amount * ratio);
     const catalogPct = l.gstPercent ?? 18;
     const pct = withGst ? catalogPct : 0;
-    if (gstIncluded && pct > 0) {
+    const lineGstIncluded = l.gstIncluded != null ? l.gstIncluded !== false : gstIncluded;
+    if (lineGstIncluded && pct > 0) {
       const taxable = round2(lineGross / (1 + pct / 100));
       const gst = round2(lineGross - taxable);
       return { ...l, gross: l.amount, gstPercent: pct, amount: lineGross, taxable, gstAmount: gst, lineTotal: lineGross };
     }
-    if (!gstIncluded && pct > 0) {
+    if (!lineGstIncluded && pct > 0) {
       const taxable = lineGross;
       const gst = round2(taxable * (pct / 100));
       return { ...l, gross: l.amount, gstPercent: pct, amount: lineGross, taxable, gstAmount: gst, lineTotal: round2(taxable + gst) };
@@ -88,7 +90,7 @@ export function summarizeLinePricing({ lines = [], gstIncluded = true, discount 
   const subtotal = round2(processed.reduce((a, l) => a + l.amount, 0));
   const taxableTotal = round2(processed.reduce((a, l) => a + l.taxable, 0));
   const gstTotal = round2(processed.reduce((a, l) => a + l.gstAmount, 0));
-  const total = gstIncluded ? subtotal : round2(taxableTotal + gstTotal);
+  const total = round2(processed.reduce((a, l) => a + l.lineTotal, 0));
 
   const byHsn = new Map();
   for (const l of processed) {

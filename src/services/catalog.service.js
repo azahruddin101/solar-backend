@@ -56,11 +56,12 @@ function applyProduct(product, category, body, company) {
   product.markModified('attributes');
   product.unit = resolveProductUnit(company, product.unit);
   if (type === 'panels') {
-    // imported panels come with brand + model only; those name the product
-    if (!String(product.name ?? '').trim()) product.name = `${product.brand} ${product.model || ''}`.trim();
+    // Excel import may send brand + model only; otherwise the product name from the form is enough
+    if (!String(product.name ?? '').trim()) product.name = `${product.brand || ''} ${product.model || ''}`.trim();
     for (const [field, label] of [['watts', 'Watt'], ['length', 'Length'], ['width', 'Width']]) if (!(Number(product[field]) > 0)) throw badRequest(`${label} is required`);
   }
   if (type === 'poles') product.shape ||= 'square';
+  if (!String(product.name ?? '').trim()) throw badRequest('Product name is required');
   return product;
 }
 

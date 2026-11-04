@@ -2,7 +2,7 @@
 // tests/companyDelete.test.js fails when a model with a `company` field is in neither list, so a new collection can't be
 // forgotten (it would otherwise keep a deleted company's client and money data).
 import {
-  AuthSession, Batch, Bill, CreditNote, Category, Client, ClientTicket, Counter, Design, DesignVersion, EmailLog, EwayBill, Expense,
+  AuthSession, Batch, Bill, CreditNote, Category, Client, ClientTicket, Counter, Design, DesignVersion, EmailLog, Estimate, EwayBill, Expense,
   InstallationCharge, Invoice, Loan, Subsidy, Notification, Package, ParentCategory, Payment, Plan, PlanRequest, Product, Project, ProjectBudget,
   Role, SerialUnit, Supplier, Ticket, User, Company,
 } from '../models/index.js';
@@ -11,7 +11,7 @@ import { leadCompanyModels } from '../integrations/leads.js';
 
 /** Models deleted with `{ company: id }`. */
 export const COMPANY_SCOPED_MODELS = [
-  Project, Design, DesignVersion, Client, Batch, SerialUnit, Supplier, Package, InstallationCharge,
+  Project, Design, DesignVersion, Client, Batch, SerialUnit, Supplier, Package, InstallationCharge, Estimate,
   EwayBill, Bill, CreditNote, Payment, Invoice, Counter, Loan, Subsidy, Expense, ProjectBudget, Role, FileShare, EmailLog, PlanRequest, AuthSession, Notification,
   User, ...leadCompanyModels,
 ];

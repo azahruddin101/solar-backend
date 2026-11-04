@@ -10,10 +10,35 @@ import { dateRangeOnField } from '../utils/listFilters.js';
 import { cleanIdempotencyKey, createOnce } from '../utils/idempotency.js';
 import { objectId } from '../utils/validators.js';
 import { archivePdfOnce } from './archivePdf.service.js';
+import { cleanServices, serviceLine } from './bill.service.js';
 import { authorityInvoicePricing } from './invoicePricing.service.js';
-import { allocateInvoiceLines, inTransaction, returnStock } from './stock.service.js';
+import { allocateInvoiceLines, inTransaction, reassignSoldSerials, returnStock, returnStockPartial } from './stock.service.js';
 
 const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
+const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+const EPS = 0.0005;
+
+const goodsLineIndexes = (row) => (row.lines || []).map((line, index) => ({ line, index })).filter(({ line }) => line?.productId);
+
+/** What can still be returned on an open product bill (by line index on `lines`). */
+export async function returnableEwayOf(company, id) {
+  const row = await EwayBill.findOne({ _id: objectId(id, 'E-way bill'), company: company._id }).lean();
+  if (!row) throw notFound('Bill');
+  if (row.status !== 'open') throw badRequest('Only an open product bill can be revised');
+  return {
+    bill: { id: String(row._id), ewayNo: row.ewayNo, status: row.status, total: row.total },
+    lines: goodsLineIndexes(row).map(({ line, index }) => ({
+      line: index,
+      name: line.name,
+      detail: line.detail || '',
+      batchNo: line.batchNo || '',
+      unit: line.unit || '',
+      qty: line.qty,
+      serials: (line.serials || []).map(String),
+      qtyLeft: Number(line.qty) || 0,
+    })),
+  };
+}
 
 /** The company's own running number for a document kind: EWB-0001, BILL-0001… */
 export async function nextDocumentNumber(company, key, prefix, session = null) {
@@ -61,6 +86,8 @@ const summary = (row) => ({
   ...toApiJSON(row),
   itemCount: (row.lines || []).reduce((a, l) => a + (Number(l.qty) || 0), 0),
   lineCount: (row.lines || []).length,
+  supersededByNo: row.supersededBy?.ewayNo || row.supersededByNo || null,
+  supersedesNo: row.supersedes?.ewayNo || row.supersedesNo || null,
 });
 
 export const ewayBillService = {
@@ -77,8 +104,12 @@ export const ewayBillService = {
 
   /** One party's e-way bills (all statuses), newest first — the proposal's or the client's billing page. */
   async forParty(company, party) {
-    const rows = await EwayBill.find({ company: company._id, ...partyFilter(party) }).sort({ createdAt: -1 }).populate('bill', 'billNo').lean();
-    return rows.map(summary);
+    const rows = await EwayBill.find({ company: company._id, ...partyFilter(party) }).sort({ createdAt: -1 }).populate('bill', 'billNo').populate('supersededBy', 'ewayNo').populate('supersedes', 'ewayNo').lean();
+    return rows.map((row) => summary({
+      ...row,
+      supersededByNo: row.supersededBy?.ewayNo ?? null,
+      supersedesNo: row.supersedes?.ewayNo ?? null,
+    }));
   },
 
   /** The open e-way bills a bill can be made for. */
@@ -95,26 +126,39 @@ export const ewayBillService = {
   },
 
   /**
-   * Generate an e-way bill: every line is a product from stock (`productId`, `priceType`, and a quantity, a batch or
-   * serial numbers). The stock is taken and the lines priced from their batches in one transaction with the insert.
-   * With an `idempotencyKey`, repeating the request returns the e-way bill it made instead of taking the stock again.
+   * Generate a bill: product lines from stock and/or service charges, with optional discount. Product lines take stock
+   * in the same transaction as the insert. With an `idempotencyKey`, repeating the request returns the bill it made.
    */
   async create(company, user, body = {}) {
     const input = Array.isArray(body.lines) ? body.lines.filter((l) => l && l.productId) : [];
-    if (!input.length) throw badRequest('Add at least one product from stock');
-    if (input.length !== (body.lines || []).length) throw badRequest('Every line of a bill must be a product from stock');
-    const withGst = body.withGst !== false;
+    const withGst = true;
     const transport = cleanTransport(body.transport);
     const govtEwayNo = String(body.govtEwayNo ?? '').replace(/\D/g, '');
     if (govtEwayNo && govtEwayNo.length !== 12) throw badRequest('The e-way bill number from the GST portal has 12 digits');
     const issuedOn = body.issuedOn ? new Date(body.issuedOn) : new Date();
     if (Number.isNaN(issuedOn.getTime())) throw badRequest('Invalid date');
+    const discount = Math.max(0, Number(body.discount) || 0);
+    const discountIsPercent = Boolean(body.discountIsPercent);
+    if (discountIsPercent && discount > 100) throw badRequest('A percentage discount can be at most 100%');
     const idempotencyKey = cleanIdempotencyKey(body.idempotencyKey);
     return createOnce(EwayBill, company, idempotencyKey, () => inTransaction(async (session) => {
       const party = await resolveParty(company, body, session);
+      const services = await cleanServices(company, body.services, session);
+      if (!input.length && !services.length) throw badRequest('Add at least one product from stock or at least one service');
       const ewayBillId = new mongoose.Types.ObjectId();
-      const lines = await allocateInvoiceLines(company, input.map((l) => ({ ...l, kind: 'goods', name: '', rate: 0 })), { ewayBillId, session });
-      const pricing = authorityInvoicePricing({ lines, gstIncluded: false, withGst, invoiceGstMode: withGst ? 'with_gst' : 'without_gst' });
+      const stockLines = input.length
+        ? await allocateInvoiceLines(company, input.map((l) => ({ ...l, kind: 'goods', name: '', rate: 0 })), { ewayBillId, session })
+        : [];
+      const lines = [...stockLines, ...services.map(serviceLine)];
+      const pricing = authorityInvoicePricing({
+        lines,
+        gstIncluded: false,
+        withGst,
+        invoiceGstMode: withGst ? 'with_gst' : 'without_gst',
+        discount,
+        discountIsPercent,
+        discountRemark: String(body.discountRemark || '').trim().slice(0, 200),
+      });
       const [created] = await EwayBill.create([{
         _id: ewayBillId,
         company: company._id,
@@ -125,6 +169,7 @@ export const ewayBillService = {
         issuedOn,
         title: party.title,
         lines: pricing.lines,
+        services,
         pricing,
         total: money(pricing.total),
         transport,
@@ -142,6 +187,7 @@ export const ewayBillService = {
       const row = await EwayBill.findOne({ _id: objectId(id, 'E-way bill'), company: company._id }).session(session);
       if (!row) throw notFound('Bill');
       if (row.status === 'cancelled') throw badRequest('This bill is already cancelled');
+      if (row.status === 'superseded') throw badRequest('This bill was revised — use the replacement bill');
       if (row.status === 'billed' || row.bill) throw conflict(`Bill ${row.ewayNo} is on an invoice and can't be cancelled`);
       await returnStock(company, row.lines, { ewayBillId: row._id, session });
       const updated = await EwayBill.findOneAndUpdate(
@@ -151,6 +197,117 @@ export const ewayBillService = {
       ).lean();
       if (!updated) throw conflict('This bill was just changed. Refresh and try again');
       return summary(updated);
+    });
+  },
+
+  /**
+   * Partially return products on an open bill: stock goes back, this bill is superseded (read-only), and a new open bill
+   * is created with the remaining products (and the same services). If everything is returned, the bill is superseded
+   * with no replacement.
+   */
+  async revise(company, user, id, body = {}) {
+    const reason = String(body.reason || '').trim().slice(0, 300);
+    if (!reason) throw badRequest('Say why the products came back');
+    const wanted = Array.isArray(body.lines) ? body.lines : [];
+    if (!wanted.length) throw badRequest('Choose at least one product to return');
+    if (new Set(wanted.map((w) => w.line)).size !== wanted.length) throw badRequest('Each line can be listed once');
+
+    return inTransaction(async (session) => {
+      const row = await EwayBill.findOne({ _id: objectId(id, 'E-way bill'), company: company._id }).session(session);
+      if (!row) throw notFound('Bill');
+      if (row.status !== 'open') throw badRequest('Only an open product bill can be revised');
+
+      const byIndex = new Map(goodsLineIndexes(row).map(({ line, index }) => [index, { line, index }]));
+      const remaining = new Map();
+      for (const { line, index } of byIndex.values()) {
+        remaining.set(index, { ...line, qty: Number(line.qty) || 0, serials: [...(line.serials || [])].map(String) });
+      }
+
+      for (const w of wanted) {
+        const g = byIndex.get(w.line);
+        if (!g) throw badRequest('Choose a product line from this bill');
+        const rem = remaining.get(w.line);
+        if (!rem) throw badRequest(`${g.line.name} was already fully returned on this revision`);
+        const serialized = rem.serials.length > 0;
+        if (serialized) {
+          const serials = [...new Set((w.serials || []).map(String))];
+          if (!serials.length) throw badRequest(`Choose serial numbers for ${rem.name}`);
+          const bad = serials.filter((s) => !rem.serials.includes(s));
+          if (bad.length) throw badRequest(`${bad.slice(0, 5).join(', ')} ${bad.length === 1 ? 'is' : 'are'} not on this line`);
+          await returnStockPartial(company, rem, { serials }, row._id, session);
+          rem.serials = rem.serials.filter((s) => !serials.includes(s));
+          rem.qty = rem.serials.length;
+        } else {
+          const qty = round2(w.qty);
+          if (!(qty > 0)) throw badRequest(`Enter how many ${rem.name} came back`);
+          if (qty - rem.qty > EPS) throw badRequest(`Only ${rem.qty} ${rem.unit || ''} on this line`.trim());
+          await returnStockPartial(company, rem, { qty }, row._id, session);
+          rem.qty = round2(rem.qty - qty);
+        }
+        if (rem.qty <= EPS) remaining.delete(w.line);
+        else remaining.set(w.line, rem);
+      }
+
+      const keptLines = [...remaining.values()].filter((l) => (Number(l.qty) || 0) > EPS);
+      const hasServices = (row.services || []).length > 0 || (row.pricing?.lines || []).some((l) => l.kind === 'service');
+      const now = new Date();
+
+      if (!keptLines.length && !hasServices) {
+        const updated = await EwayBill.findOneAndUpdate(
+          { _id: row._id, status: 'open' },
+          { $set: { status: 'superseded', supersededAt: now, cancelReason: `All products returned: ${reason}`.slice(0, 300) } },
+          { session, returnDocument: 'after' },
+        ).lean();
+        if (!updated) throw conflict('This bill was just changed. Refresh and try again');
+        return { superseded: summary(updated), replacement: null };
+      }
+
+      const newId = new mongoose.Types.ObjectId();
+      const newLines = keptLines.map((l) => ({ ...l, kind: l.kind || 'goods' }));
+      const serviceLines = (row.pricing?.lines || []).filter((l) => l.kind === 'service');
+      const lines = [...newLines, ...serviceLines];
+      const pricing = authorityInvoicePricing({
+        lines,
+        gstIncluded: false,
+        withGst: row.pricing?.withGst !== false,
+        invoiceGstMode: row.pricing?.invoiceGstMode || 'with_gst',
+        discount: row.pricing?.discount || 0,
+        discountIsPercent: row.pricing?.discountIsPercent,
+        discountRemark: row.pricing?.discountRemark || '',
+      });
+
+      await reassignSoldSerials(company, keptLines, row._id, newId, session);
+
+      const [replacement] = await EwayBill.create([{
+        _id: newId,
+        company: company._id,
+        design: row.design,
+        client: row.client,
+        ewayNo: await nextDocumentNumber(company, 'ewaybill', 'BILL', session),
+        govtEwayNo: row.govtEwayNo || '',
+        issuedOn: body.issuedOn ? new Date(body.issuedOn) : now,
+        title: row.title,
+        lines: pricing.lines,
+        services: row.services || [],
+        pricing,
+        total: money(pricing.total),
+        transport: row.transport || {},
+        note: row.note || '',
+        supersedes: row._id,
+        createdByName: user?.name || user?.email || '',
+      }], { session });
+
+      const superseded = await EwayBill.findOneAndUpdate(
+        { _id: row._id, status: 'open' },
+        { $set: { status: 'superseded', supersededBy: newId, supersededAt: now, cancelReason: `Revised: ${reason}`.slice(0, 300) } },
+        { session, returnDocument: 'after' },
+      ).lean();
+      if (!superseded) throw conflict('This bill was just changed. Refresh and try again');
+
+      return {
+        superseded: { ...summary(superseded), supersededByNo: replacement.ewayNo },
+        replacement: summary(replacement.toObject()),
+      };
     });
   },
 

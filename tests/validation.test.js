@@ -57,6 +57,7 @@ test('catalog, package and step numbers', () => {
   bad(S.productSchema, { category: cat, watts: 5000 }, 'watts');
   bad(S.productSchema, { category: cat, hsnCode: '12' }, 'hsnCode');
   ok(S.productSchema, { category: cat, hsnCode: '85414011', watts: 540, warrantyMonths: 300, isSerialized: true });
+  ok(S.productSchema, { category: cat, name: 'Generic cable', unit: 'Metre' }); // brand, model, SKU, HSN and warranty optional
   // prices live on stock receipts (batches): all three selling prices required, none negative
   const receipt = { supplier: cat, qtyReceived: 10, basePrice: 90, wholesalePrice: 95, retailPrice: '100' };
   ok(S.stockReceiveSchema, receipt);

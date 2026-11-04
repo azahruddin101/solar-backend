@@ -5,6 +5,20 @@ import { schemaOptions, text } from './schemaOptions.js';
 
 const ObjectId = mongoose.Schema.Types.ObjectId;
 
+const serviceSchema = new mongoose.Schema(
+  {
+    chargeId: { type: ObjectId, ref: 'InstallationCharge', default: null },
+    name: text(160),
+    description: text(300),
+    hsn: text(20),
+    qty: { type: Number, min: 0, default: 1 },
+    unit: text(20, { default: 'Nos' }),
+    rate: { type: Number, min: 0, default: 0 },
+    gstPercent: { type: Number, min: 0, max: 100, default: 18 },
+  },
+  { _id: false },
+);
+
 // How the goods travel. All free text apart from the mode and the reason; the two dates are YYYY-MM-DD.
 const transportSchema = new mongoose.Schema(
   {
@@ -38,7 +52,8 @@ const ewayBillSchema = new mongoose.Schema(
     govtEwayNo: text(12),
     issuedOn: { type: Date, default: Date.now },
     title: text(160), // the proposal name, or the client's
-    lines: { type: [mongoose.Schema.Types.Mixed], default: () => [] }, // the priced stock lines (see invoicePricing.service.js)
+    lines: { type: [mongoose.Schema.Types.Mixed], default: () => [] }, // the priced lines (goods and/or services; see invoicePricing.service.js)
+    services: { type: [serviceSchema], default: () => [] }, // service charges on this bill (also in pricing.lines with kind service)
     pricing: { type: mongoose.Schema.Types.Mixed, default: null },
     total: { type: Number, default: 0 },
     transport: { type: transportSchema, default: () => ({}) },
@@ -47,6 +62,9 @@ const ewayBillSchema = new mongoose.Schema(
     bill: { type: ObjectId, ref: 'Bill', default: null }, // set when a bill is generated for it
     cancelledAt: { type: Date, default: null },
     cancelReason: text(300),
+    supersededBy: { type: ObjectId, ref: 'EwayBill', default: null },
+    supersedes: { type: ObjectId, ref: 'EwayBill', default: null },
+    supersededAt: { type: Date, default: null },
     pdfName: text(200), // archived PDF, served at /uploads/<pdfName>
     createdByName: text(120),
     idempotencyKey: idempotencyField, // the key of the request that made this document, so a repeated request returns it

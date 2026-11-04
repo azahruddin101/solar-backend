@@ -20,6 +20,7 @@ export { ProjectBudget } from './projectBudget.model.js';
 export { Loan } from './loan.model.js';
 export { Subsidy } from './subsidy.model.js';
 export { InstallationCharge } from './installationCharge.model.js';
+export { Estimate } from './estimate.model.js';
 export { Package } from './package.model.js';
 export { Product } from './product.model.js';
 export { Project } from './project.model.js';

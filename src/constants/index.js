@@ -41,7 +41,7 @@ export const UNIT_TRANSITIONS = { inStock: ['sold', 'installed'], sold: ['instal
 export const PRICE_TYPES = ['base', 'wholesale', 'retail'];
 // The sale chain (services/ewayBill.service.js, bill.service.js): goods leave stock on an e-way bill, one or more
 // e-way bills plus service charges are paid on a bill, and an invoice consolidates the bills.
-export const EWAY_BILL_STATUS = ['open', 'billed', 'cancelled'];
+export const EWAY_BILL_STATUS = ['open', 'billed', 'cancelled', 'superseded'];
 export const BILL_STATUS = ['paid', 'invoiced', 'void'];
 /** An invoice is `void` when it was struck off (its bills are free again); the number is never reused. */
 export const INVOICE_STATUS = ['issued', 'void'];
