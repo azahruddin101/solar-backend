@@ -85,6 +85,16 @@ const companySchema = new mongoose.Schema(
     signatoryName: text(120),
     signatoryTitle: text(120),
     qrLabel: text(80, { default: 'Scan to pay / contact us' }),
+    // bank details for payment, printed on the proposal next to the QR code
+    bankAccountName: text(120),
+    bankName: text(120),
+    bankAccountNumber: text(40),
+    bankIfsc: text(20),
+    bankBranch: text(120),
+    bankAccountType: text(40),
+    upiId: text(80),
+    paymentQr: text(300), // a payment (UPI) QR image, printed with the bank details; not the proposal QR
+    paymentQrLabel: text(80, { default: 'Scan to pay with any UPI app' }),
     tagline: text(60, { default: 'Clean energy for a brighter tomorrow' }), // script lettering on the PDF cover
     pdfTerms: text(30000, { trim: false }), // sanitised HTML from the rich text editor (utils/richText.js)
 
@@ -109,6 +119,8 @@ const companySchema = new mongoose.Schema(
 
     // pricing used by the designer
     currency: text(8, { default: 'INR' }),
+    taxLabel: text(20, { default: 'GST' }),
+    taxRate: { type: Number, default: 18, min: 0, max: 100 },
     tariff: { type: Number, default: 8, min: 0 },
     otherCostPerKw: { type: Number, default: 18000, min: 0 },
 

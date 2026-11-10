@@ -28,7 +28,7 @@ import billingRoutes from './billing.routes.js';
 import { stockRoutes, supplierRoutes } from './stock.routes.js';
 import installationChargeRoutes from './installationCharge.routes.js';
 import estimateRoutes from './estimate.routes.js';
-import { solarRoutes, staticMapRoutes } from './google.routes.js';
+import { roofDetectRoutes, solarRoutes, staticMapRoutes } from './google.routes.js';
 import { staffCounts } from '../services/dashboard.service.js';
 import { wrap } from '../utils/wrap.js';
 
@@ -67,6 +67,8 @@ router.use('/roles', companyOnly, roleRoutes); // …and the roles (named permis
 router.use('/projects', withAreaAccess('tasks'), projectRoutes);
 // Google Solar / Static Maps calls cost money: limit them per user (and per address for the token-only image route)
 router.use('/solar', withPermission('proposals', 'view'), rateLimit({ name: 'solar', windowMs: 10 * 60 * 1000, max: 40 }), solarRoutes);
+// each detection reads a satellite picture with Claude (paid): a tighter limit
+router.use('/roof-detect', withPermission('proposals', 'update'), rateLimit({ name: 'roof-detect', windowMs: 10 * 60 * 1000, max: 15 }), roofDetectRoutes);
 router.use('/staticmap', rateLimit({ name: 'staticmap', windowMs: 10 * 60 * 1000, max: 300, by: 'ip' }), staticMapRoutes); // authenticates itself (header, or a short-lived map token for images)
 
 // the signed-in user's own inbox (company owner or agent)

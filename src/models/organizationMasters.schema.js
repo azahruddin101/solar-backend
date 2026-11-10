@@ -48,6 +48,16 @@ export function organizationMastersFields() {
     signatoryName: text(120),
     signatoryTitle: text(120),
     qrLabel: text(80, { default: 'Scan to pay / contact us' }),
+    // bank details for payment, printed on the proposal next to the QR code
+    bankAccountName: text(120),
+    bankName: text(120),
+    bankAccountNumber: text(40),
+    bankIfsc: text(20),
+    bankBranch: text(120),
+    bankAccountType: text(40),
+    upiId: text(80),
+    paymentQr: text(300), // a payment (UPI) QR image, printed with the bank details; not the proposal QR
+    paymentQrLabel: text(80, { default: 'Scan to pay with any UPI app' }),
     tagline: text(60, { default: 'Clean energy for a brighter tomorrow' }),
     pdfTerms: text(30000, { trim: false }),
     invoiceNumbering: {
@@ -61,6 +71,9 @@ export function organizationMastersFields() {
     subsidySteps: { type: [loanStepSchema], default: () => DEFAULT_SUBSIDY_STEPS.map((s) => ({ ...s })) },
     expenseReasons: { type: [{ type: String, trim: true, maxlength: 300 }], default: () => [...DEFAULT_EXPENSE_REASONS] },
     currency: text(8, { default: 'INR' }),
+    // the tax's name on screens and PDFs (GST, VAT, Sales tax…) and the rate new items start with (always editable)
+    taxLabel: text(20, { default: 'GST' }),
+    taxRate: { type: Number, default: 18, min: 0, max: 100 },
     tariff: { type: Number, default: 8, min: 0 },
     otherCostPerKw: { type: Number, default: 18000, min: 0 },
     productUnits: { type: [{ type: String, trim: true, maxlength: 20, set: capFirst }], default: () => [...DEFAULT_PRODUCT_UNITS] },
@@ -93,6 +106,7 @@ export function organizationMastersFields() {
  */
 export const MASTER_FIELD_KEYS = [
   'theme', 'logo', 'signature', 'qr', 'signatoryName', 'signatoryTitle', 'qrLabel', 'tagline', 'pdfTerms',
+  'bankAccountName', 'bankName', 'bankAccountNumber', 'bankIfsc', 'bankBranch', 'bankAccountType', 'upiId', 'paymentQr', 'paymentQrLabel',
   'installationSteps', 'amcTemplates', 'loanSteps', 'subsidySteps', 'expenseReasons',
-  'currency', 'tariff', 'otherCostPerKw', 'productUnits', 'agentRoles', 'leadForm',
+  'currency', 'taxLabel', 'taxRate', 'tariff', 'otherCostPerKw', 'productUnits', 'agentRoles', 'leadForm',
 ];

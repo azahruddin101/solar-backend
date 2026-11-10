@@ -7,6 +7,11 @@ import { forbidden } from '../utils/HttpError.js';
 
 export const solarRoutes = Router();
 solarRoutes.get('/', google.solar);
+solarRoutes.get('/model', google.solarHouseModel);
+
+// automatic roof detection (Google mask / OpenStreetMap outline + Claude reading the picture)
+export const roofDetectRoutes = Router();
+roofDetectRoutes.post('/', google.roofDetect);
 
 /** The company owner, a client (their own proposals only, see below), or staff who can view designs. */
 function mapViewerOnly(req, res, next) {

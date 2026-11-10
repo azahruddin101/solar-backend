@@ -61,6 +61,11 @@ export const env = {
   superAdminEmail: (process.env.SUPERADMIN_EMAIL || 'admin@solarplanner.local').toLowerCase(),
   superAdminPassword: process.env.SUPERADMIN_PASSWORD || '',
   googleKey: process.env.GOOGLE_MAPS_API_KEY || '',
+  // Claude reads roofs from satellite pictures (automatic roof detection); off until the key is set
+  anthropic: {
+    apiKey: (process.env.ANTHROPIC_API_KEY || '').trim(),
+    model: (process.env.ANTHROPIC_MODEL || 'claude-opus-5-5').trim(),
+  },
   frontendUrl: (process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, ''),
   oneSignalAppId: (process.env.ONESIGNAL_APP_ID || '').trim(),
   oneSignalRestApiKey: (process.env.ONESIGNAL_REST_API_KEY || '').trim(),

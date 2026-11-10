@@ -28,7 +28,8 @@ import { leadForm } from '../integrations/leads.js';
 
 const PROFILE = ['name', 'email', 'phone', 'address', 'website', 'taxId', 'pan'];
 const ADMIN_CONTROLS = ['status', 'notes'];
-const SELF_EDITABLE = [...PROFILE, 'signatoryName', 'signatoryTitle', 'qrLabel', 'tagline', 'pdfTerms', 'currency', 'tariff', 'otherCostPerKw'];
+const BANK = ['bankAccountName', 'bankName', 'bankAccountNumber', 'bankIfsc', 'bankBranch', 'bankAccountType', 'upiId', 'paymentQrLabel'];
+const SELF_EDITABLE = [...PROFILE, 'signatoryName', 'signatoryTitle', 'qrLabel', ...BANK, 'tagline', 'pdfTerms', 'currency', 'taxLabel', 'taxRate', 'tariff', 'otherCostPerKw'];
 const MAX_PRODUCT_UNITS = 30;
 const MAX_AGENT_ROLES = 30;
 
@@ -314,7 +315,7 @@ export async function updateOwnCompany(company, body) {
 }
 
 /** Settings on the company Settings page that every branch shares: saved on the organization (see companyMasters.plugin.js). */
-const SHARED_SETTINGS = ['signatoryName', 'signatoryTitle', 'qrLabel', 'tagline', 'pdfTerms', 'currency', 'tariff', 'otherCostPerKw', 'theme', 'productUnits', 'agentRoles'];
+const SHARED_SETTINGS = ['signatoryName', 'signatoryTitle', 'qrLabel', ...BANK, 'tagline', 'pdfTerms', 'currency', 'taxLabel', 'taxRate', 'tariff', 'otherCostPerKw', 'theme', 'productUnits', 'agentRoles'];
 
 const plainList = (v) => (Array.isArray(v) ? [...v].map(String) : []);
 /** Whether a submitted shared setting differs from what is in force (forms send every field back, changed or not). */
@@ -350,7 +351,7 @@ export async function saveCompanySettings({ company, organization, user }, body 
   return company;
 }
 
-const CATALOG_SELF_EDITABLE = ['currency', 'tariff', 'otherCostPerKw'];
+const CATALOG_SELF_EDITABLE = ['currency', 'taxLabel', 'taxRate', 'tariff', 'otherCostPerKw'];
 
 /** Product units and default pricing (currency, tariff, balance-of-system cost): company masters, owner only (see company.routes.js). */
 export async function updateCatalogSettings(company, body) {

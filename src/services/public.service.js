@@ -16,10 +16,10 @@ async function byToken(token, select = '-logs -data') {
 }
 
 async function companyOf(design) {
-  const c = await Company.findById(design.company).select('name logo phone email address website tagline theme currency status');
+  const c = await Company.findById(design.company).select('name logo phone email address website tagline theme currency taxLabel taxRate status');
   if (!c || c.status !== 'active') throw notFound('Proposal');
   const j = c.toJSON();
-  return { name: j.name, logo: j.logo, phone: j.phone, email: j.email, address: j.address, website: j.website, tagline: j.tagline, theme: j.theme, currency: j.currency };
+  return { name: j.name, logo: j.logo, phone: j.phone, email: j.email, address: j.address, website: j.website, tagline: j.tagline, theme: j.theme, currency: j.currency, taxLabel: j.taxLabel, taxRate: j.taxRate };
 }
 
 export async function proposal(token) {

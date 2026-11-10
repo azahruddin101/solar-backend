@@ -67,7 +67,7 @@ export const TICKET_PRIORITIES = ['low', 'normal', 'high'];
 export const CLIENT_TICKET_CATEGORIES = ['installation', 'service', 'billing', 'proposal', 'other'];
 export const TICKET_FILE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'application/pdf': 'pdf' };
 
-export const ASSET_KINDS = ['logo', 'signature', 'qr'];
+export const ASSET_KINDS = ['logo', 'signature', 'qr', 'paymentQr']; // qr: website / proposal QR · paymentQr: UPI payment QR
 export const IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
 // Starter catalog given to every new company so it can design right away.
@@ -83,9 +83,9 @@ export const DEFAULT_PILLARS = [
 ];
 // Starter categories for a complete rooftop solar system; companies can rename, remove, and add their own.
 export const DEFAULT_CATEGORIES = [
-  { name: 'Solar panels', type: 'panels', description: 'Modules used in the designer and printed on proposals.', specKeys: ['Cell type', 'Efficiency (%)', 'Cell count', 'Bifaciality'] },
+  { name: 'Solar panels', type: 'panels', description: 'Modules used in the designer and printed on proposals.', specKeys: ['Cell type', 'Efficiency (%)', 'Cell count', 'Bifaciality', 'Voc (V)', 'Vmp (V)', 'Isc (A)', 'Imp (A)', 'Temp coeff Voc (%/°C)', 'Temp coeff Pmax (%/°C)', 'NOCT (°C)', 'Max series fuse (A)', 'Max system voltage (V)'] },
   { name: 'Poles / pillars', type: 'poles', description: 'Mounting poles, priced per foot.', specKeys: ['Material', 'Coating', 'Thickness'] },
-  { name: 'Inverters', description: 'On-grid, hybrid, and micro string inverters.', specKeys: ['Capacity (kW)', 'MPPT count', 'Phase', 'Max Efficiency (%)', 'Wi-Fi'] },
+  { name: 'Inverters', description: 'On-grid, hybrid, and micro string inverters.', specKeys: ['Capacity (kW)', 'MPPT count', 'Phase', 'Max Efficiency (%)', 'Wi-Fi', 'Inverter type', 'Max DC voltage (V)', 'MPPT voltage min (V)', 'MPPT voltage max (V)', 'Start-up voltage (V)', 'Max input current per MPPT (A)', 'Max short-circuit current per MPPT (A)', 'Strings per MPPT', 'AC voltage (V)', 'Max AC output current (A)', 'Max DC power (kW)', 'Integrated DC switch', 'Integrated DC SPD'] },
   { name: 'Wire & Cabling', description: 'Solar DC cable (4/6 sq.mm) and multi-core AC copper/aluminum cabling.', specKeys: ['Size (sq.mm)', 'Conductor', 'Insulation', 'Voltage rating'] },
   { name: 'Chemical Earthing Kit', description: 'Maintenance-free chemical earthing electrodes and compound.', specKeys: ['Electrode type', 'Length (m)', 'Diameter (mm)', 'Backfill compound'] },
   { name: 'ACDB Box', description: 'AC distribution box with MCB/MCCB, SPD, and energy meter provisions.', specKeys: ['Rating (A)', 'Phases', 'SPD Class', 'IP Rating'] },

@@ -10,7 +10,7 @@ const supplierSchema = new mongoose.Schema(
     name: { type: String, required: [true, 'Supplier name is required'], trim: true, maxlength: 120, set: capFirst },
     phone: text(40),
     email: text(200, { lowercase: true }),
-    gstNumber: text(15, { uppercase: true }),
+    gstNumber: text(20, { uppercase: true }), // GSTIN, or another country's tax number (VAT, TIN…)
     address: text(400),
     notes: text(500),
     categories: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category' }], default: () => [], index: true },

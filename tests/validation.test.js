@@ -13,9 +13,10 @@ test('email: normalised when valid, rejected when malformed, optional when blank
   assert.equal(ok(S.clientSchema, client({})).email, undefined);
 });
 
-test('phone: exactly 10 digits (prefix and separators dropped); junk rejected; blank allowed', () => {
+test('phone: an Indian mobile as 10 digits, any other country with its code; junk rejected; blank allowed', () => {
   for (const p of ['9876543210', '+91 98765 43210', '098765-43210', '(98765) 43210']) assert.equal(ok(S.clientSchema, client({ phone: p })).phone, '9876543210');
-  for (const p of ['12345', '5876543210', '98765 4321', 'abcdefghij', '+91 12345 67890', '98765432101', '+14155552671']) bad(S.clientSchema, client({ phone: p }), 'phone');
+  for (const [p, want] of [['+1 (415) 555-2671', '+14155552671'], ['+971 50 123 4567', '+971501234567'], ['0044 7911 123456', '+447911123456']]) assert.equal(ok(S.clientSchema, client({ phone: p })).phone, want);
+  for (const p of ['12345', '5876543210', '98765 4321', 'abcdefghij', '+91 12345 67890', '98765432101', '971501234567', '+0 123']) bad(S.clientSchema, client({ phone: p }), 'phone');
   ok(S.clientSchema, client({ phone: '' }));
 });
 
@@ -29,6 +30,9 @@ test('GSTIN (company taxId)', () => {
   assert.equal(ok(S.companySelfSchema, { taxId: '27abcpe1234f1z5' }).taxId, '27ABCPE1234F1Z5');
   for (const g of ['27ABCPE1234F1Z', '99ABCPE1234F1Z5', '27ABCPE1234F1X5', 'hello']) bad(S.companySelfSchema, { taxId: g }, 'taxId');
   ok(S.companySelfSchema, { taxId: '' });
+  // a company outside India enters its own tax number (VAT, TRN…); GSTIN look-alikes must still be real GSTINs
+  for (const t of ['GB123456789', 'de123456789', '100123456700003']) ok(S.companySelfSchema, { taxId: t });
+  for (const t of ['NODIGITS', '1']) bad(S.companySelfSchema, { taxId: t }, 'taxId');
 });
 
 test('website, name, numbers', () => {

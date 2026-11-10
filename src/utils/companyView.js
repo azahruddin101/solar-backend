@@ -8,7 +8,8 @@ export const OWNER_VISIBLE = [
   'id', 'name', 'email', 'phone', 'address', 'website', 'taxId', 'pan', 'status',
   'limits', 'subscription', 'features',
   'theme', 'logo', 'signature', 'qr', 'signatoryName', 'signatoryTitle', 'qrLabel', 'tagline', 'pdfTerms',
-  'installationSteps', 'amcTemplates', 'loanSteps', 'subsidySteps', 'expenseReasons', 'currency', 'tariff', 'otherCostPerKw', 'productUnits', 'agentRoles', 'leadForm', 'invoiceNumbering',
+  'bankAccountName', 'bankName', 'bankAccountNumber', 'bankIfsc', 'bankBranch', 'bankAccountType', 'upiId', 'paymentQr', 'paymentQrLabel',
+  'installationSteps', 'amcTemplates', 'loanSteps', 'subsidySteps', 'expenseReasons', 'currency', 'taxLabel', 'taxRate', 'tariff', 'otherCostPerKw', 'productUnits', 'agentRoles', 'leadForm', 'invoiceNumbering',
   'createdAt', 'updatedAt',
 ];
 

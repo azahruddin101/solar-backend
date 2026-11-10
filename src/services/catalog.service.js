@@ -357,6 +357,9 @@ export async function designerCatalog(company) {
       description: p.description || '',
       hsnCode: p.hsnCode || '',
       gstPercent: p.gstPercent != null ? Number(p.gstPercent) : undefined,
+      // datasheet values the company records as attributes (e.g. an inverter's MPPT count and voltage range):
+      // the single line diagram is checked against them
+      attributes: p.attributes && typeof p.attributes === 'object' ? p.attributes : {},
     });
   }
 
@@ -378,7 +381,7 @@ export async function designerCatalog(company) {
     otherCostPerKw,
     panels: products
       .filter((p) => p.type === 'panels' && p.watts > 0 && p.length > 0 && p.width > 0)
-      .map((p) => ({ id: p.id, brand: p.brand || p.name, model: p.brand ? p.model : '', ...pick(p, ['watts', 'length', 'width', 'warrantyMonths', 'hsnCode', 'gstPercent']), price: priceOf(p), manufactureYear: stock.get(p.id)?.mfgYear || null, warrantyYears: Math.floor((p.warrantyMonths || 0) / 12), ...groupOf(p) })),
+      .map((p) => ({ id: p.id, brand: p.brand || p.name, model: p.brand ? p.model : '', ...pick(p, ['watts', 'length', 'width', 'warrantyMonths', 'hsnCode', 'gstPercent']), attributes: p.attributes && typeof p.attributes === 'object' ? p.attributes : {}, price: priceOf(p), manufactureYear: stock.get(p.id)?.mfgYear || null, warrantyYears: Math.floor((p.warrantyMonths || 0) / 12), ...groupOf(p) })),
     pillars: products
       .filter((p) => p.type === 'poles')
       .map((p) => ({ id: p.id, name: p.name, shape: p.shape, pricePerFt: priceOf(p), ...pick(p, ['hsnCode', 'gstPercent']), ...groupOf(p) })),

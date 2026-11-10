@@ -61,8 +61,8 @@ export async function companyView(user, company) {
   if (!company) return null;
   const merged = await branchWithMasters(company);
   const payload = await ownerCompanyView(merged);
-  if (user.role === ROLES.AGENT) return pick(payload, ['id', 'name', 'email', 'phone', 'logo', 'theme', 'currency', 'tariff', 'otherCostPerKw', 'productUnits', 'expenseReasons', 'features']);
-  if (user.role === ROLES.CLIENT) return pick(payload, ['id', 'name', 'email', 'phone', 'address', 'website', 'taxId', 'logo', 'signature', 'qr', 'qrLabel', 'tagline', 'signatoryName', 'signatoryTitle', 'theme', 'currency', 'pdfTerms', 'features']);
+  if (user.role === ROLES.AGENT) return pick(payload, ['id', 'name', 'email', 'phone', 'logo', 'theme', 'currency', 'taxLabel', 'taxRate', 'tariff', 'otherCostPerKw', 'productUnits', 'expenseReasons', 'features']);
+  if (user.role === ROLES.CLIENT) return pick(payload, ['id', 'name', 'email', 'phone', 'address', 'website', 'taxId', 'logo', 'signature', 'qr', 'qrLabel', 'bankAccountName', 'bankName', 'bankAccountNumber', 'bankIfsc', 'bankBranch', 'bankAccountType', 'upiId', 'paymentQr', 'paymentQrLabel', 'tagline', 'signatoryName', 'signatoryTitle', 'theme', 'currency', 'taxLabel', 'taxRate', 'pdfTerms', 'features']);
   return payload;
 }
 

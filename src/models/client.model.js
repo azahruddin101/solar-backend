@@ -12,7 +12,7 @@ const clientSchema = new mongoose.Schema(
     email: text(200, { lowercase: true }),
     phone: text(40),
     pan: text(10),
-    gstNumber: text(15, { uppercase: true }),
+    gstNumber: text(20, { uppercase: true }), // GSTIN, or another country's tax number (VAT, TIN…)
     projectType: { type: String, enum: CLIENT_PROJECT_TYPES, default: 'residential' },
     roofType: { type: String, enum: [...CLIENT_ROOF_TYPES, ''], default: '' },
     address: text(400),

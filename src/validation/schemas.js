@@ -123,8 +123,18 @@ export const companySelfSchema = obj({
   signatoryName: f.personNameOptional,
   signatoryTitle: f.textOptional(80, 'Title'),
   qrLabel: f.textOptional(80, 'QR label'),
+  paymentQrLabel: f.textOptional(80, 'Payment QR caption'),
+  bankAccountName: f.textOptional(120, 'Account name'),
+  bankName: f.textOptional(120, 'Bank name'),
+  bankAccountNumber: f.z.preprocess((v) => (typeof v === 'string' ? v.replace(/\s+/g, '') : v), f.z.string().regex(/^\d{6,20}$|^$/, 'Account number is 6 to 20 digits')).optional(),
+  bankIfsc: f.z.preprocess((v) => (typeof v === 'string' ? v.trim().toUpperCase() : v), f.z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$|^$/, 'IFSC looks like SBIN0001234')).optional(),
+  bankBranch: f.textOptional(120, 'Branch'),
+  bankAccountType: f.textOptional(40, 'Account type'),
+  upiId: f.z.preprocess((v) => (typeof v === 'string' ? v.trim() : v), f.z.string().regex(/^[\w.-]{2,}@[a-zA-Z][\w.-]*$|^$/, 'UPI ID looks like name@bank')).optional(),
   tagline: f.textOptional(160, 'Tagline'),
   currency: f.currencyCode.optional(),
+  taxLabel: f.textOptional(20, 'Tax name'),
+  taxRate: f.num({ min: 0, max: 100, label: 'Tax rate' }).optional(),
   tariff: f.num({ min: 0, max: 1000, label: 'Tariff' }).optional(),
   otherCostPerKw: f.num({ min: 0, max: 1e7, label: 'Other cost per kW' }).optional(),
 }).partial();
@@ -132,6 +142,8 @@ export const companySelfSchema = obj({
 /** The narrow slice of company settings a staff member with the "catalog" permission may change. */
 export const catalogSettingsSchema = obj({
   currency: f.currencyCode.optional(),
+  taxLabel: f.textOptional(20, 'Tax name'),
+  taxRate: f.num({ min: 0, max: 100, label: 'Tax rate' }).optional(),
   tariff: f.num({ min: 0, max: 1000, label: 'Tariff' }).optional(),
   otherCostPerKw: f.num({ min: 0, max: 1e7, label: 'Other cost per kW' }).optional(),
   productUnits: strArray(30, 20).optional(),

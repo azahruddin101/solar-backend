@@ -21,8 +21,10 @@ export async function buildingInsights({ lat, lng, referer }) {
   const key = requireKey();
 
   let last = null;
-  for (const quality of ['HIGH', 'MEDIUM', 'LOW']) {
+  // BASE comes from Google's expanded-coverage experiment: the only tier for many Indian homes
+  for (const quality of ['HIGH', 'MEDIUM', 'LOW', 'BASE']) {
     const params = new URLSearchParams({ 'location.latitude': lat.toFixed(7), 'location.longitude': lng.toFixed(7), requiredQuality: quality, key });
+    if (quality === 'BASE') params.set('experiments', 'EXPANDED_COVERAGE');
     let upstream;
     try {
       upstream = await fetch(`${SOLAR_ENDPOINT}?${params}`, { headers: refererHeader(referer) });
