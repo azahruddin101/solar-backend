@@ -1,6 +1,7 @@
 // What a company owner receives about their own company. It is an allow-list, so a field added to the Company model
 // stays private until someone deliberately lists it here (tests/companyView.test.js forces that decision).
 import { peekInvoiceNo } from '../services/invoiceNumber.service.js';
+import { DEFAULT_PROPOSAL_NUMBERING, peekProposalNo } from '../services/proposalNumber.service.js';
 import { subscriptionView } from '../services/subscription.service.js';
 
 /** Fields the owner's screens use. */
@@ -9,7 +10,7 @@ export const OWNER_VISIBLE = [
   'limits', 'subscription', 'features',
   'theme', 'logo', 'signature', 'qr', 'signatoryName', 'signatoryTitle', 'qrLabel', 'tagline', 'pdfTerms',
   'bankAccountName', 'bankName', 'bankAccountNumber', 'bankIfsc', 'bankBranch', 'bankAccountType', 'upiId', 'paymentQr', 'paymentQrLabel',
-  'installationSteps', 'amcTemplates', 'loanSteps', 'subsidySteps', 'expenseReasons', 'currency', 'taxLabel', 'taxRate', 'tariff', 'otherCostPerKw', 'productUnits', 'agentRoles', 'leadForm', 'invoiceNumbering',
+  'installationSteps', 'amcTemplates', 'loanSteps', 'subsidySteps', 'expenseReasons', 'currency', 'taxLabel', 'taxRate', 'tariff', 'otherCostPerKw', 'productUnits', 'agentRoles', 'leadForm', 'invoiceNumbering', 'proposalNumbering',
   'createdAt', 'updatedAt',
 ];
 
@@ -24,5 +25,7 @@ export async function ownerCompanyView(company) {
   const view = { ...pickOwnerFields(json), billing: await subscriptionView(company) };
   // legacy companies have `next: null` until their first invoice; show the number they will actually get
   if (view.invoiceNumbering) view.invoiceNumbering = { ...view.invoiceNumbering, nextInvoiceNo: await peekInvoiceNo(company) };
+  // companies saved before proposal numbering existed read as the defaults
+  view.proposalNumbering = { ...DEFAULT_PROPOSAL_NUMBERING, ...(view.proposalNumbering || {}), nextProposalNo: peekProposalNo(company) };
   return view;
 }

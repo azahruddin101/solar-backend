@@ -5,6 +5,7 @@ import { AuthSession, Client, Company, Design, Notification, Organization, Plan,
 import { applyPlanLimitsToCompany, applyPlanToOrganization, planSummary } from './plan.service.js';
 import { usageOf } from './orgLimits.service.js';
 import { parseInvoiceNumbering } from './invoiceNumber.service.js';
+import { parseProposalNumbering } from './proposalNumber.service.js';
 import { assignPlanAsAdmin, ensureCompanySubscription, subscriptionView } from './subscription.service.js';
 import { impersonationSession } from './auth.service.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/HttpError.js';
@@ -310,6 +311,7 @@ export async function updateOwnCompany(company, body) {
   if (body?.productUnits !== undefined) company.productUnits = cleanProductUnits(body.productUnits);
   if (body?.agentRoles !== undefined) company.agentRoles = cleanAgentRoles(body.agentRoles);
   if (body?.invoiceNumbering !== undefined) company.invoiceNumbering = await parseInvoiceNumbering(company, body.invoiceNumbering);
+  if (body?.proposalNumbering !== undefined) company.proposalNumbering = await parseProposalNumbering(company, body.proposalNumbering);
   await company.save();
   return company;
 }

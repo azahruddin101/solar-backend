@@ -106,6 +106,14 @@ const companySchema = new mongoose.Schema(
       next: { type: Number, default: null, min: 1 },
     },
 
+    // proposal numbers: `${prefix}${next padded to width}${suffix}` — see services/proposalNumber.service.js
+    proposalNumbering: {
+      prefix: text(20, { default: 'PRO-' }),
+      suffix: text(20),
+      width: { type: Number, default: 4, min: 1, max: 10 },
+      next: { type: Number, default: 1, min: 1 },
+    },
+
     // installation workflow template: copied into a project when an installation starts
     installationSteps: [installationStepSchema],
     // AMC visits scheduled after installation completes (days counted from completion date)

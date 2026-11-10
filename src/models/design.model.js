@@ -21,6 +21,7 @@ const designSchema = new mongoose.Schema(
     company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
     client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true, index: true },
     name: { type: String, required: true, trim: true, maxlength: 120 },
+    proposalNo: { type: String, trim: true, maxlength: 60 }, // the company's running proposal number (proposalNumber.service.js); proposals made before 2026-11-10 have none
     type: { type: String, enum: ['3d', 'quick'], default: '3d' }, // 'quick' = a proposal from products/packages only, no 3D design
     shareToken: { type: String }, // unguessable id in the public link / QR code; removed (not nulled) to switch the link off
     validUntil: { type: Date, default: null }, // the last day the proposal's price and terms hold
@@ -70,5 +71,7 @@ const designSchema = new mongoose.Schema(
 
 // unique among proposals that HAVE a link. (A sparse index would still treat every `null` as a value and refuse a second one.)
 designSchema.index({ shareToken: 1 }, { name: 'shareToken_string_unique', unique: true, partialFilterExpression: { shareToken: { $type: 'string' } } });
+
+designSchema.index({ company: 1, proposalNo: 1 }, { name: 'proposalNo_unique', unique: true, partialFilterExpression: { proposalNo: { $type: 'string' } } });
 
 export const Design = mongoose.model('Design', designSchema);

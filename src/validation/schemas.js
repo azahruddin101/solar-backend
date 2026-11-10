@@ -117,9 +117,17 @@ const invoiceNumbering = obj({
   next: f.invoiceNextRequired,
 });
 
+/** Proposal numbers: prefix + next running number (typed with its leading zeros) + suffix. */
+const proposalNumbering = obj({
+  prefix: f.invoicePrefixOptional,
+  suffix: f.invoicePrefixOptional,
+  next: f.invoiceNextRequired,
+});
+
 export const companySelfSchema = obj({
   ...companyProfile,
   invoiceNumbering: invoiceNumbering.optional(),
+  proposalNumbering: proposalNumbering.optional(),
   signatoryName: f.personNameOptional,
   signatoryTitle: f.textOptional(80, 'Title'),
   qrLabel: f.textOptional(80, 'QR label'),

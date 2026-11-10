@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { CLIENT_PROJECT_TYPES, CLIENT_ROOF_TYPES, DESIGN_GRID_TYPES, OPEN_DESIGN_STATUS } from '../constants/index.js';
 import { Bill, Client, Design, DesignVersion, EwayBill, Invoice, Payment, Project } from '../models/index.js';
+import { reserveProposalNo } from './proposalNumber.service.js';
 import { badRequest, forbidden, notFound } from '../utils/HttpError.js';
 import { pick } from '../utils/pick.js';
 import { objectId } from '../utils/validators.js';
@@ -204,6 +205,7 @@ export async function createDesign(company, user, body) {
     company: company._id,
     client: client._id,
     name,
+    proposalNo: await reserveProposalNo(company),
     validUntil: parseValidUntil(body?.validUntil) ?? null,
     shareToken: newShareToken(),
     type: isQuick ? 'quick' : '3d',
@@ -336,6 +338,7 @@ export async function duplicateDesign(company, user, id) {
     company: src.company,
     client: src.client._id,
     name: copyName,
+    proposalNo: await reserveProposalNo(company), // a copy is a new proposal: its own number
     type: plain.type || '3d',
     data: plain.data,
     summary: plain.summary,
