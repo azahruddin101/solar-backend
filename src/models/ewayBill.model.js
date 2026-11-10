@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { EWAY_BILL_STATUS, TRANSPORT_MODES, TRANSPORT_REASONS } from '../constants/index.js';
+import { EWAY_BILL_STATUS, PAYMENT_MODES, TRANSPORT_MODES, TRANSPORT_REASONS } from '../constants/index.js';
 import { idempotencyField, idempotencyIndex } from '../utils/idempotency.js';
 import { schemaOptions, text } from './schemaOptions.js';
 
@@ -57,6 +57,11 @@ const ewayBillSchema = new mongoose.Schema(
     pricing: { type: mongoose.Schema.Types.Mixed, default: null },
     total: { type: Number, default: 0 },
     transport: { type: transportSchema, default: () => ({}) },
+    // a bill is paid when it is generated: `amount` is what was taken then (the total, less any advance already held on receipts)
+    paid: {
+      type: new mongoose.Schema({ settled: { type: Boolean, default: false }, amount: { type: Number, default: 0 }, mode: { type: String, enum: PAYMENT_MODES, default: 'cash' }, reference: text(80) }, { _id: false }),
+      default: null,
+    },
     note: text(300),
     status: { type: String, enum: EWAY_BILL_STATUS, default: 'open', index: true },
     bill: { type: ObjectId, ref: 'Bill', default: null }, // set when a bill is generated for it

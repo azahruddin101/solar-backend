@@ -498,6 +498,7 @@ export const ewayBillCreateSchema = obj({
   discountIsPercent: z.boolean().optional(),
   discountRemark: f.textOptional(200, 'Discount remark'),
   govtEwayNo: f.textOptional(20, 'E-way bill number'),
+  payment: obj({ mode: z.enum(PAYMENT_MODES, 'Choose how the bill was paid').optional(), reference: f.textOptional(80, 'Reference') }).optional(),
   issuedOn: z.string().optional(),
   note: f.textOptional(300, 'Note'),
   transport: obj({
@@ -545,6 +546,17 @@ export const billCreateSchema = obj({
     receivedOn: z.string().optional(),
     note: f.textOptional(300, 'Note'),
   }),
+});
+
+/** Money received from a client: any amount, with the date, who took it and an optional reason. */
+export const receiptCreateSchema = obj({
+  ...chainParty,
+  amount: f.num({ min: 0.01, max: 1e10, label: 'Amount' }),
+  mode: z.enum(PAYMENT_MODES, 'Choose how the money was received'),
+  reference: f.textOptional(80, 'Reference'),
+  receivedOn: z.string().optional(),
+  receivedBy: f.textOptional(120, 'Received by'),
+  reason: f.textOptional(300, 'Reason'),
 });
 
 /** Goods back on a paid bill: which lines (by their place on the bill), how many or which serials, and the refund paid. */

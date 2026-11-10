@@ -50,7 +50,11 @@ test('finance actions are separate permissions', () => {
   assert.ok(gate('POST', '/api/billing/invoices/:id/void').some((g) => /role/.test(g) && /company/.test(g)));
   assert.ok(gate('POST', '/api/billing/eway-bills').includes('permission:finances:create_eway_bill'));
   assert.ok(gate('POST', '/api/billing/eway-bills/:id/cancel').includes('permission:finances:create_eway_bill'));
-  assert.ok(gate('POST', '/api/billing/bills').includes('permission:finances:create_bill'));
+  // invoices are no longer made (the bill is the priced document, receipts take the money): reading and voiding remain
+  assert.equal(all.some((r) => r.method === 'POST' && r.path === '/api/billing/bills'), false);
+  assert.ok(gate('POST', '/api/billing/receipts').includes('permission:finances:create_bill'));
+  assert.ok(gate('GET', '/api/billing/receipts').includes('permission:finances:view'));
+  assert.ok(gate('DELETE', '/api/billing/receipts/:id').some((g) => /role/.test(g) && /company/.test(g))); // money off the books: the owner only
   assert.ok(gate('GET', '/api/billing/bills/uninvoiced').includes('permission:finances:view'));
 });
 

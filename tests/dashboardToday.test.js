@@ -59,12 +59,14 @@ test('there is no list of who owes money: bills are paid when made, so the dashb
   assert.deepEqual(d.money, { quoted: 300000, billed: 270000, yetToBill: 60000, billedPct: 90 });
 });
 
-test('the billing count in the sidebar is the chain waiting on someone: open e-way bills and bills with no invoice', async () => {
+test('the billing count in the sidebar is who still owes money: billed more than received', async () => {
   const d = await design({ status: 'won' });
   const base = { company: company._id, client: client._id, design: d._id, title: 'x', total: 100 };
   await EwayBill.create([{ ...base, ewayNo: 'EWB-1', status: 'open' }, { ...base, ewayNo: 'EWB-2', status: 'billed' }, { ...base, ewayNo: 'EWB-3', status: 'cancelled' }]);
   await Bill.create([{ ...base, billNo: 'BILL-1', status: 'paid' }, { ...base, billNo: 'BILL-2', status: 'invoiced' }]);
-  assert.equal((await counts(company)).billing, 2); // EWB-1 and BILL-1
+  assert.equal((await counts(company)).billing, 1); // one proposal: EWB-1 (open) + both invoices = 300 billed, nothing received
+  await Payment.create({ company: company._id, client: client._id, design: d._id, receiptNo: 'RCPT-1', amount: 300 });
+  assert.equal((await counts(company)).billing, 0); // paid in full
 });
 
 test('month-by-month series: expenses, finished installations, payment modes and leads per source', async () => {

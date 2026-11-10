@@ -1,8 +1,7 @@
-// The proposal's and the client's money ledgers, the invoice that settles bills (the sale chain: ewayBill.service.js →
-// bill.service.js → here) and the invoice for parts used on an AMC visit. Invoices are never made straight from a
-// proposal: they come from paid bills.
+// The proposal's and the client's money ledgers — what was billed (ewayBill.service.js), what was received
+// (receipt.service.js) and what is still due — plus the older invoices and the invoice for parts used on an AMC visit.
 import mongoose from 'mongoose';
-import { Bill, Client, Design, Invoice, Payment, SerialUnit } from '../models/index.js';
+import { Bill, Client, Design, EwayBill, Invoice, Payment, SerialUnit } from '../models/index.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { parsePagination, toApiJSON, toApiJSONList } from '../utils/lean.js';
 import { dateRangeOnField } from '../utils/listFilters.js';
@@ -14,6 +13,7 @@ import { authorityInvoicePricing, consolidatePricing } from './invoicePricing.se
 import { billService } from './bill.service.js';
 import { creditNoteService } from './creditNote.service.js';
 import { ewayBillService, partyFilter, resolveParty } from './ewayBill.service.js';
+import { billedTotal, receiptService } from './receipt.service.js';
 import { archivePdfOnce } from './archivePdf.service.js';
 import { allocateInvoiceLines, inTransaction } from './stock.service.js';
 
@@ -35,7 +35,8 @@ async function ledger(company, design) {
   const paid = money(payments.reduce((a, p) => a + p.amount, 0));
   const invoiceRows = toApiJSONList(invoices);
   const party = { design };
-  const [ewayBills, bills, creditNotes] = await Promise.all([ewayBillService.forParty(company, party), billService.forParty(company, party), creditNoteService.forParty(company, party)]);
+  const [ewayBills, bills, creditNotes, receipts] = await Promise.all([ewayBillService.forParty(company, party), billService.forParty(company, party), creditNoteService.forParty(company, party), receiptService.forParty(company, party)]);
+  const billed = billedTotal(ewayBills, bills);
   return {
     design: {
       id: design.id,
@@ -49,6 +50,9 @@ async function ledger(company, design) {
     total,
     paid,
     balance: money(total - paid),
+    billed, // what the bills add up to
+    due: money(billed - paid), // billed and not received yet (negative: an advance is held)
+    receipts,
     invoices: invoiceRows,
     invoice: invoiceRows.find((i) => i.status !== 'void' && i.kind !== 'amc_parts') || null, // the latest sale invoice that still stands
     ...chainSummary(ewayBills, bills),
@@ -100,6 +104,13 @@ export const billingService = {
     const designs = await Design.find(match).select('-data').populate('client', 'name phone email').sort({ updatedAt: -1 });
     const sums = await Payment.aggregate([{ $match: { company: company._id, design: { $in: designs.map((d) => d._id) } } }, { $group: { _id: '$design', paid: { $sum: '$amount' }, count: { $sum: 1 }, lastPaidOn: { $max: '$receivedOn' } } }]);
     const ids = designs.map((d) => d._id);
+    // what was billed on each proposal: its open bills plus its older invoices (same rule as receipt.service billedTotal)
+    const [openBills, invoiceTotals] = await Promise.all([
+      EwayBill.aggregate([{ $match: { company: company._id, design: { $in: ids }, status: 'open' } }, { $sort: { createdAt: 1 } }, { $group: { _id: '$design', total: { $sum: '$total' }, billNo: { $last: '$ewayNo' } } }]),
+      Bill.aggregate([{ $match: { company: company._id, design: { $in: ids }, status: { $ne: 'void' } } }, { $group: { _id: '$design', total: { $sum: '$total' } } }]),
+    ]);
+    const openOf = new Map(openBills.map((x) => [String(x._id), x]));
+    const invoicedOf = new Map(invoiceTotals.map((x) => [String(x._id), x.total]));
     const [older, current] = await Promise.all([
       Invoice.find({ company: company._id, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $in: ids } }).select('design invoiceNo createdAt').lean(),
       Bill.find({ company: company._id, status: { $ne: 'void' }, design: { $in: ids } }).select('design billNo createdAt').lean(), // invoices issued from bills
@@ -115,7 +126,8 @@ export const billingService = {
       const total = totalOf(d);
       const paid = money(s?.paid);
       const inv = latestInv.get(String(d._id));
-      return { id: d.id, name: d.name, type: d.type, client: d.client, total, paid, balance: money(total - paid), payments: s?.count || 0, invoiceNo: inv?.invoiceNo || '', lastPaidOn: s?.lastPaidOn || null, bookedOn: d.updatedAt };
+      const billed = money((openOf.get(String(d._id))?.total || 0) + (invoicedOf.get(String(d._id)) || 0));
+      return { id: d.id, name: d.name, type: d.type, client: d.client, total, paid, balance: money(total - paid), billed, due: money(billed - paid), billNo: openOf.get(String(d._id))?.billNo || '', payments: s?.count || 0, invoiceNo: inv?.invoiceNo || '', lastPaidOn: s?.lastPaidOn || null, bookedOn: d.updatedAt };
     });
   },
 
@@ -195,21 +207,25 @@ export const billingService = {
     const client = await Client.findOne({ _id: objectId(clientId, 'Client'), company: company._id }).select('name phone email address gstNumber').lean();
     if (!client) throw notFound('Client');
     const party = { client, design: null };
-    const [payments, invoices, ewayBills, bills, creditNotes] = await Promise.all([
+    const [payments, invoices, ewayBills, bills, creditNotes, receipts] = await Promise.all([
       Payment.find({ company: company._id, ...partyFilter(party) }).sort({ createdAt: 1 }).lean(),
       Invoice.find({ company: company._id, ...partyFilter(party) }).sort({ createdAt: -1 }).lean(),
       ewayBillService.forParty(company, party),
       billService.forParty(company, party),
       creditNoteService.forParty(company, party),
+      receiptService.forParty(company, party),
     ]);
     const invoiceRows = toApiJSONList(invoices);
     const paid = money(payments.reduce((a, p) => a + p.amount, 0));
-    const billed = money(bills.reduce((a, b) => a + b.total, 0));
+    const billed = billedTotal(ewayBills, bills);
     return {
       client: toApiJSON(client),
       total: billed,
       paid,
       balance: money(billed - paid),
+      billed,
+      due: money(billed - paid),
+      receipts,
       invoices: invoiceRows,
       invoice: invoiceRows.find((i) => i.status !== 'void' && i.kind !== 'amc_parts') || null,
       previousTermsAndConditions: invoices[0]?.termsAndConditions || '',

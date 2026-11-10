@@ -12,6 +12,7 @@ import { deleteDesign, updateDesign } from '../src/services/design.service.js';
 import { cleanTransport, ewayBillService } from '../src/services/ewayBill.service.js';
 import { receiveStock, setUnitStatus } from '../src/services/stock.service.js';
 import { creditNoteService } from '../src/services/creditNote.service.js';
+import { receiptService } from '../src/services/receipt.service.js';
 
 let replSet;
 let company;
@@ -465,5 +466,88 @@ describe('credit notes after invoice', () => {
       creditNoteService.create(company, user, bill.id, { lines: [{ line: 0, qty: 1 }], reason: 'x', refund: { mode: 'upi' } }),
       /void it instead/,
     );
+  });
+});
+
+describe('receipts', () => {
+  const receipt = (body = {}) => receiptService.create(company, user, { design: design.id, amount: 5000, mode: 'cash', ...body });
+
+  test('record any amount with its date, who took it and an optional reason, under a running number', async () => {
+    const a = await receipt({ receivedOn: '2026-11-01', reason: 'Advance for panels' });
+    const b = await receipt({ amount: 1250.5, mode: 'upi', reference: 'UPI-9', receivedBy: 'Asha' });
+    assert.deepEqual([a.receiptNo, b.receiptNo], ['RCPT-0001', 'RCPT-0002']);
+    assert.equal(a.amount, 5000);
+    assert.equal(a.reason, 'Advance for panels');
+    assert.equal(a.receivedByName, 'Owner'); // the signed-in user unless another name is typed
+    assert.equal(new Date(a.receivedOn).toISOString().slice(0, 10), '2026-11-01');
+    assert.equal(b.receivedByName, 'Asha');
+    assert.equal(b.reason, '');
+    assert.equal(b.bill, null);
+    assert.equal(String(b.client), client.id);
+  });
+
+  test('refuse a missing amount, an unknown mode and a date in the future', async () => {
+    await assert.rejects(receipt({ amount: 0 }), /amount received/);
+    await assert.rejects(receipt({ mode: 'barter' }), /how the money was received/);
+    await assert.rejects(receipt({ receivedOn: '2999-01-01' }), /future/);
+    assert.equal(await Payment.countDocuments(), 0);
+  });
+
+  test('the ledger shows what was billed, what was received and what is due', async () => {
+    await receipt({ amount: 500 }); // an advance before anything is billed
+    let ledger = await billingService.get(company, design.id);
+    assert.deepEqual([ledger.billed, ledger.paid, ledger.due], [0, 500, -500]);
+    const bill = await eway([{ productId: cable.id, qty: 10, priceType: 'retail' }], { services: [{ name: 'Installation', rate: 1000, gstPercent: 18 }] });
+    assert.equal(bill.total, 2360); // (10 × 100 + 1000) + 18%
+    // a bill is paid when it is generated: the total less the advance already held
+    assert.deepEqual([bill.paid.settled, bill.paid.amount, bill.paid.mode], [true, 1860, 'cash']);
+    ledger = await billingService.get(company, design.id);
+    assert.deepEqual([ledger.billed, ledger.paid, ledger.due], [2360, 2360, 0]);
+    assert.deepEqual(ledger.receipts.map((x) => x.amount), [500]); // the bill's own payment is not listed as a receipt
+    const [row] = await billingService.overview(company);
+    assert.deepEqual([row.billed, row.paid, row.due, row.billNo], [2360, 2360, 0, 'BILL-0001']);
+    const paidRow = await Payment.findOne({ ewayBill: bill.id }).lean();
+    assert.deepEqual([paidRow.receiptNo, paidRow.amount], ['PMT-BILL-0001', 1860]);
+    await assert.rejects(receiptService.remove(company, String(paidRow._id)), /Cancel that bill/);
+    await ewayBillService.cancel(company, bill.id, {}); // a cancelled bill is no longer owed, and its payment goes with it
+    ledger = await billingService.get(company, design.id);
+    assert.deepEqual([ledger.billed, ledger.paid, ledger.due], [0, 500, -500]);
+  });
+
+  test('a partial return lowers the payment of the bill to what remains', async () => {
+    const bill = await eway([{ productId: cable.id, qty: 10, priceType: 'retail' }], { payment: { mode: 'upi', reference: 'UPI-7' } });
+    assert.deepEqual([bill.total, bill.paid.amount, bill.paid.mode], [1180, 1180, 'upi']);
+    const { replacement } = await ewayBillService.revise(company, user, bill.id, { reason: 'Extra', lines: [{ line: 0, qty: 4 }] });
+    assert.deepEqual([replacement.total, replacement.paid.amount], [708, 708]);
+    const rows = await Payment.find().lean();
+    assert.deepEqual(rows.map((p) => [p.receiptNo, p.amount, String(p.ewayBill)]), [[`PMT-${replacement.ewayNo}`, 708, replacement.id]]);
+  });
+
+  test('work for a client with no proposal, and list company-wide', async () => {
+    const r = await receiptService.create(company, user, { client: client.id, amount: 300, mode: 'cheque', reference: '000123' });
+    assert.equal(r.design, null);
+    const ledger = await billingService.getClient(company, client.id);
+    assert.deepEqual([ledger.paid, ledger.receipts.length], [300, 1]);
+    await receipt();
+    const list = await receiptService.list(company, {});
+    assert.equal(list.total, 2);
+    assert.equal(list.items[0].client.name, 'Sunil Patil');
+  });
+
+  test('a repeated request records the money once', async () => {
+    const a = await receipt({ idempotencyKey: 'receipt-key-1' });
+    const b = await receipt({ idempotencyKey: 'receipt-key-1' });
+    assert.equal(a.receiptNo, b.receiptNo);
+    assert.equal(await Payment.countDocuments(), 1);
+  });
+
+  test('the owner can remove a receipt, but not the payment of an older invoice', async () => {
+    const r = await receipt();
+    assert.equal((await receiptService.remove(company, r.id)).ok, true);
+    assert.equal(await Payment.countDocuments(), 0);
+    const e = await eway([{ productId: cable.id, qty: 1, priceType: 'retail' }]);
+    const { payment } = await billService.create(company, user, { design: design.id, ewayBills: [e.id], payment: paid() });
+    await assert.rejects(receiptService.remove(company, payment.id), /Void that invoice/);
+    assert.equal((await receiptService.list(company, {})).total, 0); // an invoice's payment is not a receipt
   });
 });

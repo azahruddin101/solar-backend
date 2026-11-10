@@ -32,6 +32,7 @@ const estimateSchema = new mongoose.Schema(
     withGst: { type: Boolean, default: true },
     lines: { type: [lineSchema], default: [] },
     notes: text(1000),
+    design: { type: mongoose.Schema.Types.ObjectId, ref: 'Design', default: null }, // the 2D proposal last made from this estimate (Convert to proposal)
     // worked out by the server on every save, so lists need not read the lines
     subtotal: { type: Number, default: 0 },
     gstTotal: { type: Number, default: 0 },

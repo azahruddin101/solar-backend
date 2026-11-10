@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { OPEN_DESIGN_STATUS, ROLES } from '../constants/index.js';
 import { Organization, Company, User, Plan, Client, Design, Project, Loan, Subsidy, Payment, Ticket, ClientTicket, EwayBill, Bill } from '../models/index.js';
+import { partiesWithDue } from './receipt.service.js';
 import { leadModels } from '../integrations/leads.js';
 import { badRequest, forbidden, notFound } from '../utils/HttpError.js';
 import { email as validEmail, objectId, password as validPassword } from '../utils/validators.js';
@@ -271,8 +272,8 @@ export async function getOrganizationOverview(user) {
     countByBranch(Project, branchIds, { status: 'completed', 'amcVisits.status': 'pending' }),
     countByBranch(ClientTicket, branchIds, { status: { $in: ['open', 'in_progress'] } }),
     countByBranch(Ticket, branchIds, { status: { $in: ['open', 'in_progress'] } }),
-    countByBranch(EwayBill, branchIds, { status: 'open' }),
-    countByBranch(Bill, branchIds, { status: 'paid' }),
+    partiesWithDue(branchIds), // billed more than received
+    Promise.resolve(() => 0), // (was: paid bills with no invoice; invoices are no longer made)
     countByBranch(Design, branchIds, { status: 'won' }),
     countByBranch(Design, branchIds, { status: { $in: OPEN_DESIGN_STATUS } }),
     sumByBranch(Payment, branchIds, 'amount'),

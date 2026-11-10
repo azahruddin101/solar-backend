@@ -154,6 +154,13 @@ export const uploadEwayBillPdf = withStorage(
   ['application/pdf'],
 );
 
+/** Archived receipt PDF (money received from a client; a Payment row). */
+export const uploadReceiptPdf = withStorage(
+  memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),
+  (req, file) => `${req.company.id}-receipt-${req.params.id}-${rand(8)}.pdf`,
+  ['application/pdf'],
+);
+
 /** Archived bill PDF (a paid bill of e-way bills and services; `-bill-` is the supplier's bill on a batch, so this is `-salebill-`). */
 export const uploadBillPdf = withStorage(
   memory({ fileSize: 20 * 1024 * 1024, files: 1 }, (req, file, cb) => (file.mimetype === 'application/pdf' ? cb(null, true) : cb(badRequest('Upload a PDF')))).single('file'),

@@ -162,6 +162,8 @@ export const billService = {
       if (ewayBills.length) {
         const marked = await EwayBill.updateMany({ _id: { $in: ewayBills.map((e) => e._id) }, status: 'open' }, { $set: { status: 'billed', bill: billId } }, { session });
         if (marked.modifiedCount !== ewayBills.length) throw conflict('One of these bills was just invoiced. Refresh and try again');
+        // the invoice takes the payment over: what each bill recorded when it was generated is replaced by the invoice's own
+        await Payment.deleteMany({ company: company._id, ewayBill: { $in: ewayBills.map((e) => e._id) } }, { session });
       }
 
       // the payment row: on a proposal it moves the proposal's balance; on a client alone it stands by itself

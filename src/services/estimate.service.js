@@ -1,4 +1,4 @@
-import { Estimate } from '../models/index.js';
+import { Design, Estimate } from '../models/index.js';
 import { badRequest, notFound } from '../utils/HttpError.js';
 import { objectId } from '../utils/validators.js';
 
@@ -52,7 +52,7 @@ export const estimateService = {
     const match = { company: company._id };
     const needle = str(q, 80);
     if (needle) match['client.name'] = { $regex: needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
-    const rows = await Estimate.find(match).select('-lines').sort({ createdAt: -1 }).limit(500);
+    const rows = await Estimate.find(match).select('-lines').sort({ createdAt: -1 }).limit(500).populate('design', 'name'); // a deleted proposal reads as none
     return rows;
   },
 
@@ -68,6 +68,15 @@ export const estimateService = {
     const doc = await estimateService.get(company, id);
     Object.assign(doc, clean(body));
     return doc.save();
+  },
+
+  /** Note the proposal that was made from this estimate (the conversion itself happens on the page). */
+  async markConverted(company, id, designId) {
+    const design = await Design.findOne({ _id: objectId(designId, 'Proposal'), company: company._id }).select('_id');
+    if (!design) throw notFound('Proposal');
+    const doc = await Estimate.findOneAndUpdate({ _id: objectId(id, 'Estimate'), company: company._id }, { $set: { design: design._id } }, { returnDocument: 'after' });
+    if (!doc) throw notFound('Estimate');
+    return doc;
   },
 
   async remove(company, id) {

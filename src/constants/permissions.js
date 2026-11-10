@@ -55,12 +55,12 @@ export const PERMISSION_CATALOG = {
   },
   finances: {
     label: 'Finances',
-    description: 'Bills (goods out of stock) and invoices (paid, tax invoices)',
+    description: 'Bills (materials and services, with their delivery challan) and receipts (money received)',
     actions: {
       view: 'View',
       create_eway_bill: 'Create bill',
-      create_bill: 'Create invoice',
-      create_invoice: 'Create AMC parts invoice', // invoices are now issued from bills (create_bill); this one is only for AMC parts
+      create_bill: 'Create receipt', // was "Create invoice": the paid invoice took the payment, which a receipt does now
+      create_invoice: 'Create AMC parts invoice', // the only invoice still made
     },
   },
   inventory: {
@@ -195,25 +195,25 @@ export const ROLE_TEMPLATES = [
   {
     key: 'accountant',
     name: 'Accountant',
-    description: 'Makes e-way bills, bills and invoices.',
+    description: 'Makes bills and receipts.',
     permissions: ['finances:view', 'finances:create_eway_bill', 'finances:create_bill', 'finances:create_invoice', 'clients:view', 'proposals:view'],
   },
   {
     key: 'cashier',
     name: 'Cashier',
-    description: 'Takes payments on bills — no e-way bills or invoices.',
+    description: 'Takes payments and gives receipts — no bills.',
     permissions: ['finances:view', 'finances:create_bill'],
   },
   {
     key: 'invoicing',
     name: 'Invoicing clerk',
-    description: 'Makes e-way bills and invoices — no payments.',
+    description: 'Makes bills — no payments.',
     permissions: ['finances:view', 'finances:create_eway_bill', 'finances:create_invoice'],
   },
   {
     key: 'storekeeper',
     name: 'Store keeper',
-    description: 'Maintains products, packages and installation charges, and sends goods out on e-way bills.',
+    description: 'Maintains products, packages and installation charges, and sends goods out on bills.',
     permissions: ['inventory:view', 'inventory:create', 'inventory:update', 'finances:view', 'finances:create_eway_bill'],
   },
   {

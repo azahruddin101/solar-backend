@@ -2,8 +2,8 @@
 // Creating one takes the stock of its lines in the same transaction (stock.service.js); cancelling an e-way bill that
 // is not on a bill yet puts the stock back.
 import mongoose from 'mongoose';
-import { TRANSPORT_MODES, TRANSPORT_REASONS } from '../constants/index.js';
-import { Client, Counter, Design, EwayBill } from '../models/index.js';
+import { PAYMENT_MODES, TRANSPORT_MODES, TRANSPORT_REASONS } from '../constants/index.js';
+import { Bill, Client, Counter, Design, EwayBill, Payment } from '../models/index.js';
 import { badRequest, conflict, notFound } from '../utils/HttpError.js';
 import { parsePagination, toApiJSON, toApiJSONList } from '../utils/lean.js';
 import { dateRangeOnField } from '../utils/listFilters.js';
@@ -66,6 +66,17 @@ export async function resolveParty(company, { design, client } = {}, session = n
 
 /** The filter for one party's documents: a proposal's, or a client's with no proposal. */
 export const partyFilter = ({ design, client }) => (design ? { design: design._id ?? design } : { client: client._id ?? client, design: null });
+
+/**
+ * What a party owes before a new bill: its standing bills (open bills and older invoices) less everything it has paid.
+ * Negative when it holds an advance (receipts beyond what was billed).
+ */
+async function dueBefore(company, party, session) {
+  const match = { company: company._id, ...partyFilter(party) };
+  const sum = async (Model, extra, field) => (await Model.aggregate([{ $match: { ...match, ...extra } }, { $group: { _id: null, sum: { $sum: `$${field}` } } }]).session(session))[0]?.sum || 0;
+  const [open, invoiced, received] = [await sum(EwayBill, { status: 'open' }, 'total'), await sum(Bill, { status: { $ne: 'void' } }, 'total'), await sum(Payment, {}, 'amount')];
+  return { billed: money(open + invoiced), due: money(open + invoiced - received) };
+}
 
 const TEXT = { vehicleNo: 20, transporter: 120, transporterId: 15, docNo: 80, docDate: 20, fromPlace: 200, toPlace: 200 };
 
@@ -141,8 +152,15 @@ export const ewayBillService = {
     const discountIsPercent = Boolean(body.discountIsPercent);
     if (discountIsPercent && discount > 100) throw badRequest('A percentage discount can be at most 100%');
     const idempotencyKey = cleanIdempotencyKey(body.idempotencyKey);
+    // a bill is paid when it is generated: how the money came in (cash unless told otherwise)
+    const payment = body.payment && typeof body.payment === 'object' ? body.payment : {};
+    const mode = payment.mode || 'cash';
+    if (!PAYMENT_MODES.includes(mode)) throw badRequest('Choose how the bill was paid');
+    const reference = String(payment.reference || '').trim().slice(0, 80);
+    const staff = user?.name || user?.email || '';
     return createOnce(EwayBill, company, idempotencyKey, () => inTransaction(async (session) => {
       const party = await resolveParty(company, body, session);
+      const before = await dueBefore(company, party, session);
       const services = await cleanServices(company, body.services, session);
       if (!input.length && !services.length) throw badRequest('Add at least one product from stock or at least one service');
       const ewayBillId = new mongoose.Types.ObjectId();
@@ -159,19 +177,44 @@ export const ewayBillService = {
         discountIsPercent,
         discountRemark: String(body.discountRemark || '').trim().slice(0, 200),
       });
+      const total = money(pricing.total);
+      const ewayNo = await nextDocumentNumber(company, 'ewaybill', 'BILL', session);
+      // the payment: the bill total, less any advance the party already paid on receipts
+      const amount = money(Math.min(total, Math.max(0, before.due + total)));
+      if (amount >= 0.01) {
+        await Payment.create([{
+          company: company._id,
+          design: party.design?._id ?? null,
+          client: party.client._id,
+          ewayBill: ewayBillId,
+          billTo: { name: party.client.name },
+          title: party.title,
+          receiptNo: `PMT-${ewayNo}`,
+          amount,
+          mode,
+          reference,
+          receivedOn: issuedOn,
+          note: `Bill ${ewayNo}`,
+          contractTotal: money(before.billed + total),
+          balanceAfter: money(before.due + total - amount),
+          receivedByName: staff,
+          createdByName: staff,
+        }], { session });
+      }
       const [created] = await EwayBill.create([{
         _id: ewayBillId,
         company: company._id,
         design: party.design?._id ?? null,
         client: party.client._id,
-        ewayNo: await nextDocumentNumber(company, 'ewaybill', 'BILL', session),
+        ewayNo,
+        paid: { settled: true, amount, mode, reference },
         govtEwayNo,
         issuedOn,
         title: party.title,
         lines: pricing.lines,
         services,
         pricing,
-        total: money(pricing.total),
+        total,
         transport,
         note: String(body.note || '').trim().slice(0, 300),
         createdByName: user?.name || user?.email || '',
@@ -190,6 +233,7 @@ export const ewayBillService = {
       if (row.status === 'superseded') throw badRequest('This bill was revised — use the replacement bill');
       if (row.status === 'billed' || row.bill) throw conflict(`Bill ${row.ewayNo} is on an invoice and can't be cancelled`);
       await returnStock(company, row.lines, { ewayBillId: row._id, session });
+      await Payment.deleteMany({ company: company._id, ewayBill: row._id }, { session }); // the bill no longer stands, so neither does its payment
       const updated = await EwayBill.findOneAndUpdate(
         { _id: row._id, status: 'open' },
         { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: String(body.reason || '').trim().slice(0, 300) } },
@@ -259,6 +303,7 @@ export const ewayBillService = {
           { session, returnDocument: 'after' },
         ).lean();
         if (!updated) throw conflict('This bill was just changed. Refresh and try again');
+        await Payment.deleteMany({ company: company._id, ewayBill: row._id }, { session });
         return { superseded: summary(updated), replacement: null };
       }
 
@@ -277,13 +322,20 @@ export const ewayBillService = {
       });
 
       await reassignSoldSerials(company, keptLines, row._id, newId, session);
+      const newNo = await nextDocumentNumber(company, 'ewaybill', 'BILL', session);
+      // the payment follows the goods: it moves to the replacement bill, lowered to that bill's total
+      const paidRow = await Payment.findOne({ company: company._id, ewayBill: row._id }).session(session);
+      const keptAmount = paidRow ? money(Math.min(paidRow.amount, pricing.total)) : 0;
+      if (paidRow && keptAmount >= 0.01) await Payment.updateOne({ _id: paidRow._id }, { $set: { ewayBill: newId, receiptNo: `PMT-${newNo}`, amount: keptAmount, note: `Bill ${newNo}` } }, { session });
+      else if (paidRow) await Payment.deleteOne({ _id: paidRow._id }, { session });
 
       const [replacement] = await EwayBill.create([{
         _id: newId,
         company: company._id,
         design: row.design,
         client: row.client,
-        ewayNo: await nextDocumentNumber(company, 'ewaybill', 'BILL', session),
+        ewayNo: newNo,
+        paid: row.paid?.settled ? { settled: true, amount: keptAmount, mode: row.paid.mode, reference: row.paid.reference || '' } : null,
         govtEwayNo: row.govtEwayNo || '',
         issuedOn: body.issuedOn ? new Date(body.issuedOn) : now,
         title: row.title,

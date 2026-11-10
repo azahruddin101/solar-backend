@@ -2,6 +2,7 @@
 import { DEFAULT_PRODUCT_UNITS, DESIGN_STATUS, OPEN_DESIGN_STATUS, ROLES } from '../constants/index.js';
 import { catalogOwner } from '../utils/catalogOwner.js';
 import { Batch, Bill, Category, Client, ClientTicket, Design, EwayBill, Estimate, Expense, InstallationCharge, Invoice, Loan, Subsidy, Package, Payment, Product, Project, SerialUnit, Supplier, Ticket, User } from '../models/index.js';
+import { partiesWithDue } from './receipt.service.js';
 import { warrantyEndDate } from '../models/serialUnit.model.js';
 import { totalOf } from './billing.service.js';
 import { agentRolesList } from './company.service.js';
@@ -58,7 +59,9 @@ export async function dashboard(company) {
     Invoice.find({ company: company._id, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $ne: null } }).select('design invoiceNo issuedOn total createdAt').lean(),
     // invoices issued since the chain became bill → invoice are Bill rows (billNo is the invoice number)
     Bill.find({ company: company._id, status: { $ne: 'void' }, design: { $ne: null } }).select('design billNo issuedOn total createdAt').lean(),
-  ]).then(([c, d, p, older, current]) => [c, d, p, [...older, ...current.map(({ billNo, ...b }) => ({ ...b, invoiceNo: billNo }))]]);
+    // since 2026-11-10 a booked job gets a bill (EwayBill row) and no invoice: an open bill counts as its document
+    EwayBill.find({ company: company._id, status: 'open', design: { $ne: null } }).select('design ewayNo issuedOn total createdAt').lean(),
+  ]).then(([c, d, p, older, current, bills]) => [c, d, p, [...older, ...current.map(({ billNo, ...b }) => ({ ...b, invoiceNo: billNo })), ...bills.map(({ ewayNo, ...b }) => ({ ...b, invoiceNo: ewayNo }))]]);
 
   // pipeline: how many proposals and how much money sit in each stage
   const stages = Object.fromEntries(STATUSES.map((s) => [s, { count: 0, value: 0, kwp: 0 }]));
@@ -141,7 +144,7 @@ export async function dashboard(company) {
         })),
       // proposals sent to the client that nobody has moved for a week
       followUp: designs.filter((d) => isOpen(d) && !d.clientResponse?.decision && new Date(d.updatedAt) < week).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt)).slice(0, 5).map((d) => ({ id: String(d._id), name: d.name, type: d.type, client: d.client?.name || '', value: totalOf(d), updatedAt: d.updatedAt })),
-      // booked proposals with a price but no invoice yet
+      // booked proposals with a price but no bill (or older invoice) yet
       invoice: won.filter((w) => w.total > 0 && !w.invoiceNo).slice(0, 5),
     },
     recentPayments: payments.slice(0, 6).map((p) => ({ id: String(p._id), receiptNo: p.receiptNo, amount: p.amount, mode: p.mode, receivedOn: p.receivedOn, client: p.client?.name || '', design: p.design?.name || '', designId: String(p.design?._id || '') })),
@@ -216,7 +219,8 @@ export async function today(company) {
     Promise.all([
       Invoice.distinct('design', { ...filter, status: { $ne: 'void' }, kind: { $ne: 'amc_parts' }, design: { $ne: null } }),
       Bill.distinct('design', { ...filter, status: { $ne: 'void' }, design: { $ne: null } }), // invoices issued from bills
-    ]).then(([a, b]) => [...a, ...b]),
+      EwayBill.distinct('design', { ...filter, status: { $in: ['open', 'billed'] }, design: { $ne: null } }), // bills: the document a booked job gets now
+    ]).then((lists) => lists.flat()),
     Expense.find({ ...filter, spentOn: { $gte: months[0].start } }).select('amount spentOn').lean(),
     clientTicketOpenCountForCompany(company._id),
     ClientTicket.countDocuments({ ...filter, teamUnread: { $gt: 0 } }),
@@ -414,8 +418,8 @@ export async function today(company) {
   };
 }
 
-/** The sale chain's work waiting on someone: e-way bills with no bill yet, and paid bills with no invoice yet. */
-const billingActionCount = async (company) => (await EwayBill.countDocuments({ company: company._id, status: 'open' })) + (await Bill.countDocuments({ company: company._id, status: 'paid' }));
+/** Billing that waits on someone: booked proposals and clients that were billed more than they have paid (receipts). */
+const billingActionCount = async (company) => (await partiesWithDue([company._id]))(company._id);
 
 /** The numbers shown beside the sidebar links: how many of each thing the company has. `billing` is the count that needs action. */
 /** The company's tickets with the platform team that are still open or in progress (as for client support). */
