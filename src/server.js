@@ -80,4 +80,10 @@ await AuthSession.deleteMany({ $or: [{ expiresAt: null }, { expiresAt: { $exists
 await ensureSuperAdmin();
 startLeadIntegrationWorkers();
 startAmcReminderWorker();
+// how much memory the API holds, every 15 minutes: a figure that keeps climbing between restarts is a leak
+const mb = (n) => Math.round(n / 1048576);
+setInterval(() => {
+  const m = process.memoryUsage();
+  logger.info('memory', { rssMb: mb(m.rss), heapUsedMb: mb(m.heapUsed), heapTotalMb: mb(m.heapTotal), externalMb: mb(m.external), uptimeH: (process.uptime() / 3600).toFixed(1) });
+}, 15 * 60 * 1000).unref();
 app.listen(env.port, () => logger.info('API listening', { url: `http://localhost:${env.port}`, origins: env.corsOrigins.join(',') }));

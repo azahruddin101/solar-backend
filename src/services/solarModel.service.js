@@ -10,6 +10,7 @@
 // Everything is returned in local metres around the requested point (x east, y north), heights in
 // metres above the ground. Results are kept for 30 days (Google's caching limit for this API).
 
+import { boundedCache } from '../utils/boundedCache.js';
 import { createHash } from 'node:crypto';
 import { fromArrayBuffer } from 'geotiff';
 import mongoose from 'mongoose';
@@ -25,7 +26,10 @@ const KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 const HOUSE_MAX = 300; // roof height grid cells per side (0.2 m on most houses)
 const PHOTO_MAX = 640; // photo pixels per side
 
-const memory = new Map();
+// Each model is large (roof height grids and a photo for every building: several MB). Only the few used most
+// recently stay in memory; every model is in the database too. (An unbounded Map here grew by one model for every
+// roof outline ever asked for and was never emptied: the server's memory climbed until it was restarted.)
+const memory = boundedCache(6);
 const table = () => (mongoose.connection?.readyState === 1 ? mongoose.connection.db.collection('solar_models') : null);
 
 /** Convex hull (monotone chain), counter-clockwise. */

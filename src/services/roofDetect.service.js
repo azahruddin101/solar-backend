@@ -9,6 +9,7 @@
 //
 // Claude needs ANTHROPIC_API_KEY. Without it, the outline alone is returned as a plain roof.
 
+import { boundedCache } from '../utils/boundedCache.js';
 import crypto from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import mongoose from 'mongoose';
@@ -321,7 +322,7 @@ function roofSettings(part, local, mainLocal) {
 // detection changes in a way that should redo old answers.
 const DETECT_VERSION = 3;
 const CACHE_MS = 30 * 24 * 60 * 60 * 1000;
-const memory = new Map();
+const memory = boundedCache(200); // the most recent answers only: all of them are in the database (never an endless Map)
 const table = () => (mongoose.connection?.readyState === 1 ? mongoose.connection.db.collection('roof_detections') : null);
 async function recall(key) {
   const id = `v${DETECT_VERSION}:${key}`;
