@@ -57,6 +57,8 @@ const ewayBillSchema = new mongoose.Schema(
     pricing: { type: mongoose.Schema.Types.Mixed, default: null },
     total: { type: Number, default: 0 },
     transport: { type: transportSchema, default: () => ({}) },
+    // whether a delivery challan was asked for with this bill (asked since 2026-11-10; bills from before always had one)
+    withChallan: { type: Boolean, default: true },
     // a bill is paid when it is generated: `amount` is what was taken then (the total, less any advance already held on receipts)
     paid: {
       type: new mongoose.Schema({ settled: { type: Boolean, default: false }, amount: { type: Number, default: 0 }, mode: { type: String, enum: PAYMENT_MODES, default: 'cash' }, reference: text(80) }, { _id: false }),

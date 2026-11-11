@@ -143,7 +143,10 @@ export const ewayBillService = {
   async create(company, user, body = {}) {
     const input = Array.isArray(body.lines) ? body.lines.filter((l) => l && l.productId) : [];
     const withGst = true;
-    const transport = cleanTransport(body.transport);
+    // the delivery challan is optional: only a bill that carries materials and asked for one has it, and only then
+    // are the delivery details kept
+    const withChallan = input.length > 0 && body.withChallan !== false;
+    const transport = cleanTransport(withChallan ? body.transport : null);
     const govtEwayNo = String(body.govtEwayNo ?? '').replace(/\D/g, '');
     if (govtEwayNo && govtEwayNo.length !== 12) throw badRequest('The e-way bill number from the GST portal has 12 digits');
     const issuedOn = body.issuedOn ? new Date(body.issuedOn) : new Date();
@@ -216,6 +219,7 @@ export const ewayBillService = {
         pricing,
         total,
         transport,
+        withChallan,
         note: String(body.note || '').trim().slice(0, 300),
         createdByName: user?.name || user?.email || '',
         idempotencyKey: idempotencyKey || undefined,
@@ -344,6 +348,7 @@ export const ewayBillService = {
         pricing,
         total: money(pricing.total),
         transport: row.transport || {},
+        withChallan: row.withChallan !== false,
         note: row.note || '',
         supersedes: row._id,
         createdByName: user?.name || user?.email || '',

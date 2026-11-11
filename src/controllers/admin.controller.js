@@ -1,3 +1,4 @@
+import { countNewFreeProposals } from '../services/freeProposal.service.js';
 // Super admin: manage every company on the platform.
 import { Company, Plan, PlanRequest } from '../models/index.js';
 import * as companyService from '../services/company.service.js';
@@ -9,8 +10,8 @@ export async function stats(req, res) {
 
 /** The numbers beside the admin sidebar links. `planRequests` counts only the ones waiting for a decision. */
 export async function counts(req, res) {
-  const [companies, plans, planRequests] = await Promise.all([Company.countDocuments({}), Plan.countDocuments({}), PlanRequest.countDocuments({ status: 'pending' })]);
-  res.json({ companies, plans, planRequests });
+  const [companies, plans, planRequests, freeProposals] = await Promise.all([Company.countDocuments({}), Plan.countDocuments({}), PlanRequest.countDocuments({ status: 'pending' }), countNewFreeProposals()]);
+  res.json({ companies, plans, planRequests, freeProposals });
 }
 
 export async function listCompanies(req, res) {

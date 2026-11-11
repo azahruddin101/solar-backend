@@ -509,6 +509,7 @@ export const ewayBillCreateSchema = obj({
   payment: obj({ mode: z.enum(PAYMENT_MODES, 'Choose how the bill was paid').optional(), reference: f.textOptional(80, 'Reference') }).optional(),
   issuedOn: z.string().optional(),
   note: f.textOptional(300, 'Note'),
+  withChallan: z.boolean().optional(),
   transport: obj({
     mode: z.enum(TRANSPORT_MODES, 'Choose how the goods travel').optional(),
     reason: z.enum(TRANSPORT_REASONS, 'Choose the reason for transport').optional(),
@@ -599,3 +600,10 @@ export const invoiceFromBillsSchema = obj({
   termsAndConditions: f.textOptional(30000, 'Terms and Conditions'),
 });
 
+
+/* ───────────── free proposals (public site, no sign-in): the maker's own fields are cleaned in its service ───────────── */
+
+export const freeProposalUpdateSchema = obj({
+  status: z.enum(['new', 'contacted', 'converted', 'closed']).optional(),
+  adminNotes: f.textOptional(2000, 'Notes'),
+});

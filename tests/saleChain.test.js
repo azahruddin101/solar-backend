@@ -551,3 +551,15 @@ describe('receipts', () => {
     assert.equal((await receiptService.list(company, {})).total, 0); // an invoice's payment is not a receipt
   });
 });
+
+describe('delivery challan on a bill', () => {
+  test('is made only when asked for: without it the delivery details are not kept', async () => {
+    const plain = await eway([{ productId: cable.id, qty: 1, priceType: 'retail' }], { withChallan: false });
+    assert.equal(plain.withChallan, false);
+    assert.equal(plain.transport.vehicleNo, '');
+    assert.equal(plain.transport.toPlace, '');
+    const withOne = await eway([{ productId: cable.id, qty: 1, priceType: 'retail' }], { withChallan: true });
+    assert.equal(withOne.withChallan, true);
+    assert.equal(withOne.transport.toPlace, 'Site');
+  });
+});
