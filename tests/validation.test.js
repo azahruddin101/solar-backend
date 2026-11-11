@@ -39,12 +39,14 @@ test('website, name, numbers', () => {
   for (const w of ['www.example.com', 'https://example.co.in/about', 'example.com']) ok(S.companySelfSchema, { website: w });
   for (const w of ['not a site', 'http://', 'example', 'ftp://x.com']) bad(S.companySelfSchema, { website: w }, 'website');
   bad(S.clientSchema, { name: '' }, 'name');
-  bad(S.clientSchema, { name: '12@#' }, 'name');
+  // a name takes any characters (digits and symbols too); it only has to be given
+  for (const name of ['12@#', 'Client1', 'A-1 Solar #2', 'X']) assert.equal(ok(S.clientSchema, client({ name })).name, name);
   bad(S.clientSchema, client({ kwRequired: -3 }), 'kwRequired');
   bad(S.clientSchema, client({ kwRequired: 'abc' }), 'kwRequired');
   assert.equal(ok(S.clientSchema, client({ kwRequired: '' })).kwRequired, null);
   assert.equal(ok(S.clientSchema, client({ kwRequired: '5.5' })).kwRequired, 5.5);
-  bad(S.clientSchema, client({ referredBy: { name: 'X', phone: '123' } }), 'referredBy.name');
+  bad(S.clientSchema, client({ referredBy: { name: 'X', phone: '123' } }), 'referredBy.phone'); // the phone is still checked
+  assert.equal(ok(S.clientSchema, client({ referredBy: { name: 'Client1', phone: '9876543210' } })).referredBy.name, 'Client1');
 });
 
 test('passwords: strength only when setting one', () => {

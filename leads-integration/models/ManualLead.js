@@ -6,8 +6,17 @@ const mongoose = require('mongoose');
 const manualLeadSchema = mongoose.Schema(
   {
     company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
-    // 'manual' = typed in on the form, 'import' = from a spreadsheet
-    source: { type: String, enum: ['manual', 'import'], default: 'manual' },
+    // 'manual' = typed in on the form, 'import' = from a spreadsheet, 'referral' = a client referred this person
+    // from their portal ("Refer someone")
+    source: { type: String, enum: ['manual', 'import', 'referral'], default: 'manual' },
+    // a referral: the client who referred them, and the one thing that client is told about it — that it was
+    // converted or lost ('' while the company is still working on it). See src/services/referral.service.js.
+    referredByClient: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', default: null, index: true },
+    referredByClientName: { type: String, default: '' },
+    referredByClientPhone: { type: String, default: '' }, // the client's own contact, as it was when they referred
+    referredByClientEmail: { type: String, default: '' },
+    referralOutcome: { type: String, enum: ['', 'converted', 'lost'], default: '' },
+    referralOutcomeAt: { type: Date, default: null },
 
     fullName: { type: String, required: true, trim: true, maxlength: 120 },
     phone: { type: String, required: true, trim: true, maxlength: 20 },

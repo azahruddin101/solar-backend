@@ -301,3 +301,33 @@ async function sendAmcUpcoming({ companyId, clientId, projectId, designName, vis
     data: { event: 'amc_upcoming' },
   }, companyId, 'amc_upcoming', `amc-upcoming:${eventId}`);
 }
+
+/* ───────────── referrals ("Refer someone" in the client portal) ───────────── */
+
+/** A client referred someone: the owner(s) and the staff who see every lead are told there is a new referral lead. */
+export function notifyReferralAdded(payload) {
+  sendReferralAdded(payload).catch((e) => console.error(`[push] referral notification failed: ${e.message}`));
+}
+
+async function sendReferralAdded({ companyId, leadId, clientName, name }) {
+  const [owners, staff] = await Promise.all([ownerIdsOf(companyId), staffIdsWith(companyId, 'leads:view_all')]);
+  const audiences = [
+    { userIds: owners, path: '/dashboard/leads/manual' },
+    { userIds: staff, path: '/agent/leads/manual' },
+  ];
+  await sendTo(audiences, { title: 'New referral from a client', body: `${clientName} referred ${name}`.slice(0, 300), data: { event: 'referral_added', leadId } }, companyId, 'referral_added', `referral-added:${leadId}`);
+}
+
+/** A referral was converted or lost: the client who referred it is told. Nothing else about the lead reaches them. */
+export function notifyReferralOutcome(payload) {
+  sendReferralOutcome(payload).catch((e) => console.error(`[push] referral outcome notification failed: ${e.message}`));
+}
+
+async function sendReferralOutcome({ companyId, clientId, leadId, name, outcome }) {
+  const userIds = await clientUserIdsOf(companyId, clientId);
+  if (!userIds.length) return;
+  const message = outcome === 'converted'
+    ? { title: 'Your referral went ahead', body: `Good news: ${name}, whom you referred, has become a customer. Thank you!` }
+    : { title: 'An update on your referral', body: `${name}, whom you referred, has decided not to go ahead for now. Thank you for referring them.` };
+  await sendTo([{ userIds, path: '/portal/refer' }], { ...message, data: { event: `referral_${outcome}`, leadId } }, companyId, `referral_${outcome}`, `referral-${outcome}:${leadId}`);
+}

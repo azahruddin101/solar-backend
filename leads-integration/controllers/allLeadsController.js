@@ -203,7 +203,7 @@ async function loadManualChunk(req, limit, statusId, manualSource) {
     ManualLead.find(filter)
       .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
-      .select('fullName phone address source createdAt assignedTo assignedAt isPriority scheduledAt rescheduledCount isRescheduled isReassigned reassignedCount assignmentHistory convertedClient convertedClientName convertedAt statusName statusColor status')
+      .select('fullName phone address source referredByClientName referredByClientPhone createdAt assignedTo assignedAt isPriority scheduledAt rescheduledCount isRescheduled isReassigned reassignedCount assignmentHistory convertedClient convertedClientName convertedAt statusName statusColor status')
       .populate('assignedTo', 'name')
       .lean(),
   ]);
@@ -212,7 +212,7 @@ async function loadManualChunk(req, limit, statusId, manualSource) {
     currentStatus: lead.status
       ? { _id: lead.status._id || lead.status, name: lead.statusName, color: lead.statusColor }
       : null,
-  }, lead.source === 'import' ? 'import' : 'manual', { address: lead.address || '' }));
+  }, lead.source === 'import' ? 'import' : 'manual', { address: lead.address || '', ...(lead.source === 'referral' ? { sourceLabel: 'Referral', referredByClientName: lead.referredByClientName || '', referredByClientPhone: lead.referredByClientPhone || '' } : {}) })); // a client's referral: a manual lead, named as what it is
   return { total, items };
 }
 

@@ -60,8 +60,7 @@ const validWebsite = (v) => {
   }
 };
 
-const PERSON = /^[\p{L}\p{M}][\p{L}\p{M}\s.'’-]*$/u;
-const ORG = /^[\p{L}\p{N}][\p{L}\p{N}\p{M}\s.,&'’()/+-]*$/u;
+// Names take any characters (digits and symbols too: "Client1", "A-1 Solar #2"); a required name only has to be given.
 
 /* ───────────── text-like fields ───────────── */
 
@@ -75,9 +74,9 @@ const validTaxNumber = (v) => !/^\d{2}[A-Z]{5}/.test(v) && /^[A-Z0-9][A-Z0-9 ./-
 /** A GSTIN, or (for a company whose tax is not GST) its own country's tax number. The form checks GSTINs strictly. */
 export const gstinOptional = optional((v) => validGstin(v) || validTaxNumber(v), 'Enter a valid tax number, like the GSTIN 27ABCDE1234F1Z5', { max: 20, transform: (v) => v.toUpperCase() });
 export const websiteOptional = optional(validWebsite, 'Enter a valid website, like www.example.com');
-export const personNameRequired = required((v) => v.length >= 2 && PERSON.test(v), 'Enter a valid name (letters only, at least 2)', { max: 120, blank: 'Name is required' });
-export const personNameOptional = optional((v) => v.length >= 2 && PERSON.test(v), 'Enter a valid name (letters only, at least 2)', { max: 120 });
-export const orgNameRequired = required((v) => v.length >= 2 && ORG.test(v), 'Enter a valid name', { max: 120, blank: 'Name is required' });
+export const personNameRequired = required(() => true, 'Enter a name', { max: 120, blank: 'Name is required' });
+export const personNameOptional = optional(() => true, 'Enter a name', { max: 120 });
+export const orgNameRequired = required(() => true, 'Enter a name', { max: 120, blank: 'Name is required' });
 export const consumerNumberOptional = optional((v) => /^[A-Za-z0-9][A-Za-z0-9/-]{3,29}$/.test(v), 'Enter a valid consumer number (4–30 letters, digits, - or /)', { max: 30 });
 export const skuOptional = optional((v) => /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(v), 'SKU can only have letters, digits and . _ - /', { max: 60 });
 export const hsnOptional = optional((v) => /^\d{4}(\d{2}(\d{2})?)?$/.test(v), 'HSN code must be 4, 6 or 8 digits', { max: 8 });

@@ -8,6 +8,7 @@ import { bindLeadsTenant, leadAssignmentModel, leadHandlers as h, leadModels } f
 import { assignedWriteScope } from '../../leads-integration/utils/leadScope.js';
 import { convertedStatusIds } from '../../leads-integration/utils/convertedLast.js';
 import { Client, User } from '../models/index.js';
+import { syncReferralOutcome } from '../services/referral.service.js';
 import { attachPermissions, effectiveFrom, rolesById } from '../services/permission.service.js';
 import multer from 'multer';
 import { rateLimit } from '../middlewares/rateLimit.middleware.js';
@@ -72,6 +73,14 @@ async function resolveAssignee(req, res, next) {
 
 router.use(bindLeadsTenant, scopeToOwnLeads);
 
+// a referral from a client's portal: once its status change is saved, the client is told if it is now converted or lost
+const referralWatch = (req, res, next) => {
+  res.on('finish', () => {
+    if (res.statusCode < 300 && req.company) syncReferralOutcome(req.company._id, req.params.id).catch((e) => console.error(`[referral] could not update the client: ${e.message}`));
+  });
+  next();
+};
+
 router.get('/statuses', view, h.statuses);
 router.get('/assignees', permissionOnly('leads', 'assign', 'view_all'), async (req, res) => {
   res.json((await leadStaff(req.company)).map((u) => ({ _id: u.id, name: u.name, email: u.email, status: 'active' })));
@@ -88,7 +97,7 @@ router.get('/manual/template', create, h.manual.downloadTemplate);
 router.post('/manual/import', create, rateLimit({ name: 'lead-import', windowMs: 10 * 60 * 1000, max: 20 }), readSheet, h.manual.importManualLeads);
 router.post('/manual/assign', assign, resolveAssignee, h.manual.assignManualLeads);
 router.put('/manual/:id', update, h.manual.updateManualLead);
-router.put('/manual/:id/status', status, h.manual.updateManualLeadStatus);
+router.put('/manual/:id/status', status, referralWatch, h.manual.updateManualLeadStatus);
 router.put('/manual/:id/priority', update, h.manualPriority);
 
 router.get('/meta', view, h.metaList);

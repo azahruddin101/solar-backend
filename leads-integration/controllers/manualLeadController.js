@@ -55,6 +55,10 @@ const serialize = (lead) => ({
   address: lead.address,
   fields: lead.fields || {},
   source: lead.source,
+  referredByClient: lead.referredByClient || null, // a referral from a client's portal
+  referredByClientName: lead.referredByClientName || '',
+  referredByClientPhone: lead.referredByClientPhone || '',
+  referredByClientEmail: lead.referredByClientEmail || '',
   createdAt: lead.createdAt,
   leadCreatedAt: lead.createdAt,
   createdByName: lead.createdByName,
